@@ -1,0 +1,52 @@
+# Brainstorm / planning scratch
+.superpowers/
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.npm/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Zig
+zig-cache/
+zig-out/
+
+# Engine fork build artifacts
+engine/upstream/zig-cache/
+engine/upstream/zig-out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+coverage/
+*.log
+husk-replay-*.jsonl
+
+# Local databases (site graph cache)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Secrets
+.env
+.env.*
+!.env.example
