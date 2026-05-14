@@ -49,7 +49,7 @@ export function isToolsCallRequest(
 export function rewriteToolsListResponse(
   msg: JsonRpcSuccessResponse & { result: McpToolsListResult }
 ): JsonRpcSuccessResponse {
-  const upstreamTools = msg.result.tools.map((t) => rebrandTool(t));
+  const upstreamTools = (msg.result as McpToolsListResult).tools.map((t: McpTool) => rebrandTool(t));
   const tools: McpTool[] = [...upstreamTools, ...HUSK_NATIVE_TOOLS];
   return {
     jsonrpc: "2.0",
