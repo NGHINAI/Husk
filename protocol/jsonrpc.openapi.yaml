@@ -10,8 +10,8 @@ info:
     surface defined in Milestone 3 (`create_session`, `goto`, `snapshot`,
     `act`, `close_session`) and Milestone 5 (`set_policy`).
   license:
-    name: AGPL-3.0-or-later
-    url: https://www.gnu.org/licenses/agpl-3.0.html
+    name: MIT
+    url: https://opensource.org/licenses/MIT
 
 servers:
   - url: http://localhost:7777
