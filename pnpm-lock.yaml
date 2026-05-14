@@ -12,6 +12,15 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
+  mcp:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.12.0
+        version: 20.19.41
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
   orchestrator:
     devDependencies:
       '@types/node':

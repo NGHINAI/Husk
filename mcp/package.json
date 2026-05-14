@@ -1,0 +1,20 @@
+{
+  "name": "@husk/mcp",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "husk-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsc --build --watch",
+    "test": "echo 'tests added in M6'",
+    "lint": "echo 'lint config in M3'",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.5.4"
+  }
+}
