@@ -184,3 +184,86 @@ Full spec §5.1 hashing (`role ‖ name_norm ‖ landmark_path ‖ ordinal ‖ c
 However, a descoped stable-ID of `blake3(role ‖ '\0' ‖ name_norm ‖ '\0' ‖ xpath)[:16]` is **immediately implementable** with zero upstream changes: `role` and `name` (WAI-ARIA computed) are already emitted per node in the JSON output, and `xpath` is already computed and emitted (`appendXPathSegment` at `SemanticTree.zig:327`). The xpath string (e.g. `/html[1]/body[1]/main[1]/section[2]/button[1]`) provides structural uniqueness almost equivalent to `landmark_path + ordinal` in most documents, with the advantage of being already present. Stability degrades only on dynamic pages where elements are inserted mid-list — the same class of instability that `landmark_path + ordinal` partially addresses.
 
 The three missing inputs (`landmark_path`, `ordinal`, `context_window`) are additive — they can be patched into `SemanticTree.zig` and `NodeData` without changing any existing fields or callers. Total patch estimate: **~300–400 lines of Zig** across 2–3 files, 1–2 weeks of work. The landmark_path patch alone (~150 lines) would unlock both `landmark_path` and `ordinal` together. `context_window` is the largest and most optional of the three (it only improves disambiguation for near-duplicate elements).
+
+## 4. CDP Coverage (spec §4 transport boundary)
+
+### Files in `src/cdp/`
+
+| File | LOC | Domain handled |
+|---|---|---|
+| `CDP.zig` | 1235 | Top-level dispatcher + `BrowserContext` state; routes all incoming messages to domain handlers |
+| `AXNode.zig` | 1593 | Accessibility node computation (WAI-ARIA role/name); called by `Accessibility.getFullAXTree` |
+| `Node.zig` | 610 | CDP node registry + per-node serialiser (`nodeWriter`, `axnodeWriter`); bridge between DOM pointers and CDP node IDs |
+| `testing.zig` | 321 | In-process CDP test harness |
+| `id.zig` | 177 | Frame/loader/request ID generation helpers |
+| `domains/page.zig` | 1551 | `Page` domain |
+| `domains/dom.zig` | 863 | `DOM` domain |
+| `domains/target.zig` | 795 | `Target` domain |
+| `domains/network.zig` | 736 | `Network` domain |
+| `domains/lp.zig` | 690 | `LP` domain (lightpanda-specific: SemanticTree, Markdown, click, fill, etc.) |
+| `domains/fetch.zig` | 482 | `Fetch` domain (request interception) |
+| `domains/storage.zig` | 311 | `Storage` domain |
+| `domains/emulation.zig` | 218 | `Emulation` domain |
+| `domains/runtime.zig` | 165 | `Runtime` domain |
+| `domains/browser.zig` | 148 | `Browser` domain |
+| `domains/input.zig` | 121 | `Input` domain |
+| `domains/console.zig` | 80 | `Console` domain |
+| `domains/accessibility.zig` | 69 | `Accessibility` domain |
+| `domains/security.zig` | 66 | `Security` domain |
+| `domains/audits.zig` | 39 | `Audits` domain |
+| `domains/performance.zig` | 32 | `Performance` domain |
+| `domains/inspector.zig` | 32 | `Inspector` domain |
+| `domains/log.zig` | 31 | `Log` domain |
+| `domains/css.zig` | 30 | `CSS` domain |
+
+### Domain-by-domain coverage table
+
+| CDP Domain | Spec §4 dependency | Upstream implementation | Methods implemented | Methods stubbed / partial | Methods missing |
+|---|---|---|---|---|---|
+| `Page` | Required (navigation, lifecycle) | **Yes** | `enable`, `navigate`, `reload`, `stopLoading`, `close`, `getFrameTree`, `getNavigationHistory`, `navigateToHistoryEntry`, `setLifecycleEventsEnabled`, `addScriptToEvaluateOnNewDocument`, `removeScriptToEvaluateOnNewDocument`, `createIsolatedWorld`, `handleJavaScriptDialog`, `getLayoutMetrics`; events: `frameNavigated`, `frameStartedLoading`, `frameStoppedLoading`, `frameAttached`, `frameScheduledNavigation`, `frameRequestedNavigation`, `frameClearedScheduledNavigation`, `frameStartedNavigating`, `lifecycleEvent`, `domContentEventFired`, `loadEventFired`, `javascriptDialogOpening` | `captureScreenshot` (returns a hardcoded PNG binary, ignores format/quality/clip params — `not_implemented` warning logged); `printToPDF` (returns a hardcoded PDF binary); `getLayoutMetrics` (returns hardcoded 1920×1080, no real layout) | `Page.captureSnapshot`, `Page.getResourceContent`, `Page.setBypassCSP` |
+| `DOM` | Required (read DOM state) | **Yes** | `enable`, `getDocument`, `querySelector`, `querySelectorAll`, `performSearch` (CSS + XPath), `getSearchResults`, `discardSearchResults`, `resolveNode`, `describeNode`, `scrollIntoViewIfNeeded`, `getContentQuads`, `getBoxModel`, `requestChildNodes`, `getFrameOwner`, `getOuterHTML`, `requestNode`; event: `setChildNodes` | `getBoxModel`/`getContentQuads` use faux layout (correct API shape, fake pixel values); `getOuterHTML` logs `not_implemented` warning for `includeShadowDOM=true` | `DOM.setAttributeValue`, `DOM.removeNode`, `DOM.setOuterHTML`, `DOM.getAttributes` — write operations not present |
+| `Runtime` | Required (JS evaluation) | **Yes — via V8 Inspector** | `enable`, `disable`, `runIfWaitingForDebugger`, `evaluate`, `callFunctionOn`, `releaseObject`, `getProperties`, `addBinding`; event: `consoleAPICalled`, `executionContextsCleared` | All JS execution methods delegate to V8's internal Inspector protocol (`bc.callInspector(cmd.input.json)`) — lightpanda does not manually decode Runtime params, meaning the Inspector handles result serialisation directly. The `logInspector` debug helper logs `evaluate`/`callFunctionOn` scripts to `.zig-cache/tmp/` only in Debug builds. | `Runtime.getHeapUsage`, `Runtime.queryObjects` — not wired |
+| `Network` | Required (cookies/headers) | **Yes** | `enable`, `disable`, `setCacheDisabled`, `setExtraHTTPHeaders`, `setUserAgentOverride` (delegates to Emulation), `deleteCookies`, `clearBrowserCookies`, `clearBrowserCache`, `canClearBrowserCache`, `setCookie`, `setCookies`, `getCookies`, `getAllCookies`, `getResponseBody`; events: `requestWillBeSent`, `responseReceived`, `loadingFinished`, `loadingFailed`, `requestServedFromCache` | Cookie partition key (`CHIPS`) silently ignored with `not_implemented` warning; response timing object fields all hardcoded to `-1` (TODO comment in source); no `requestWillBeSentExtraInfo` / `responseReceivedExtraInfo` events | `Network.setRequestInterception` (use `Fetch` domain instead), `Network.getResponseBodyForInterception` |
+| `Input` | Required (click/type/key) | **Partial** | `dispatchKeyEvent` (keyDown, keyUp, char; all modifiers; routes to `frame.triggerKeyboard()`), `dispatchMouseEvent` (mousePressed → `frame.triggerMouseClick(x, y)`), `insertText` (→ `frame.insertText()`) | `dispatchMouseEvent` silently no-ops for `mouseReleased`, `mouseMoved`, `mouseWheel` — returns success but does nothing. No hover, no drag, no mouseWheel scrolling. | `Input.dispatchTouchEvent`, `Input.synthesizeTapGesture`, `Input.imeSetComposition` |
+| `Accessibility` | Helpful for §5.1 stable-IDs | **Yes — partial** | `enable`, `disable`, `getFullAXTree` (full document AX tree via `bc.axnodeWriter()`; supports `depth` and `frameId` params) | `enable`/`disable` are no-ops (return `null` result, no state change); `getFullAXTree` uses the same faux-layout bbox as DOM (irrelevant for role/name extraction) | `Accessibility.getPartialAXTree`, `Accessibility.queryAXTree`, `Accessibility.getAXNodeAndAncestors` — per-node AX queries not implemented |
+| `DOMSnapshot` | Helpful for §5.2 snapshots | **No** | — | — | `DOMSnapshot.captureSnapshot` not present at all; no `DOMSnapshot` domain file exists in `src/cdp/domains/`. No snapshot-related method strings appear anywhere in `src/cdp/`. |
+| `Snapshot` (custom in spec) | Spec'd as our addition | n/a (custom) | — | — | Not in upstream; must be added as a new domain handler + case in `dispatchCommand()` |
+| `SemanticId` (custom in spec) | Spec'd as our addition | n/a (custom) | — | — | Not in upstream; must be added as a new domain handler + case in `dispatchCommand()` |
+
+### CDP dispatch mechanism
+
+The top-level dispatcher lives in `CDP.zig:277–341` (`dispatchCommand` function). It parses the incoming JSON-RPC method string at the first `.`, splitting into `domain` (before) and `action` (after). Domain routing is a **compile-time `switch` on the domain byte-length** — each length bucket further `switch`es on a `@bitCast(u16/u24/…)` integer of the domain bytes, which is a zero-cost perfect hash at compile time:
+
+```
+switch (domain.len) {
+    2  => LP
+    3  => DOM | Log | CSS
+    4  => Page
+    5  => Fetch | Input
+    6  => Target | Audits
+    7  => Browser | Runtime | Network | Storage | Console
+    8  => Security
+    9  => Emulation | Inspector
+    11 => Performance
+    13 => Accessibility
+    else => error.UnknownDomain
+}
+```
+
+**Adding a custom domain is trivial:** insert one new `asUint(uN, "DomainName")` case in the appropriate length bucket (e.g. `Snapshot` = 8 chars → the `8 =>` bucket; `SemanticId` = 10 chars → add a `10 =>` bucket) and route to a new `.zig` file with a `processMessage(cmd: *CDP.Command) !void` function. The `Command` struct provides typed param decoding (`cmd.params(T)`) and response helpers (`cmd.sendResult`, `cmd.sendEvent`, `cmd.sendError`). No other infrastructure changes are required. This is a **low-friction extension point**.
+
+Within each domain, methods are dispatched via `std.meta.stringToEnum` on a comptime enum of method names, then a `switch (action)` over the enum. Adding a new method to an existing domain means adding one enum variant and one switch arm.
+
+### Verdict
+
+⚠️ **Most coverage exists but some methods are stubs or missing.**
+
+All five **Required** CDP domains (Page, DOM, Runtime, Network, Input) are implemented. For the orchestrator→engine transport boundary this means the primary use-cases — navigate, DOM query, JS evaluation, cookie injection, click/type — are functional in upstream without modification.
+
+The critical stubs to note:
+1. **`Input.dispatchMouseEvent`** only handles `mousePressed`; `mouseReleased`, `mouseMoved`, and `mouseWheel` silently no-op (`input.zig:99`). This is fine for click-dispatch (Husk fires `mousePressed` then relies on DOM event handlers) but rules out drag operations.
+2. **`Page.captureScreenshot`** returns a hardcoded PNG blob regardless of content (`page.zig:863`). Irrelevant for semantic snapshot work, but rules out screenshot-based visual diffing over CDP.
+3. **`Accessibility.getFullAXTree`** is the most valuable method for spec §5.1 — it is **fully implemented** and returns the complete WAI-ARIA accessibility tree. This means our spec's custom `Snapshot` and `SemanticId` CDP domains may not be necessary at all: the orchestrator can call `Accessibility.getFullAXTree` directly to get role + name per node, then compute stable IDs client-side without a custom domain.
+4. **`DOMSnapshot`** is entirely absent. The spec's custom `Snapshot` domain was proposed precisely because `DOMSnapshot.captureSnapshot` was expected to be missing — this confirms that assumption. Our `Snapshot` custom domain will need to be added.
+
+The most important implemented method is **`Accessibility.getFullAXTree`** (`accessibility.zig:44`): it directly exposes the WAI-ARIA role/name tree that spec §5.1 requires for stable-ID computation, making the custom `SemanticId` CDP domain potentially redundant. The most important missing method is **`DOMSnapshot.captureSnapshot`** (absent entirely): confirms the `Snapshot` custom domain addition is necessary and cannot be avoided by falling back to an upstream CDP method.
