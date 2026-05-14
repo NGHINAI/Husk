@@ -9,12 +9,14 @@
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --build --watch",
-    "test": "echo 'tests added in M6'",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "echo 'lint config in M3'",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20.12.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.0"
   }
 }
