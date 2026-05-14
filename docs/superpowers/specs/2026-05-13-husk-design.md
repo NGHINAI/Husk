@@ -7,9 +7,9 @@
 | Date | 2026-05-13 |
 | License | AGPL v3 (core) · MIT (examples, protocol schemas) · CLA required for external contributions |
 | Project root | `/Users/nirmalghinaiya/Desktop/husk/` |
-| Engine basis | Fork of [lightpanda](https://lightpanda.io) (AGPL v3) |
-| Tech stack | Zig (engine) · TypeScript/Node (orchestrator + canonical SDK) · Python (shim SDK) |
-| v0 target | 6–8 weeks, single engineer |
+| Engine basis | Consumes [lightpanda](https://lightpanda.io) (AGPL v3) as a binary dependency for v0. Fork remains as `engine/upstream` submodule for v0.1+ patches. *(Amended post-M2-spike — see [DECISION.md](./../spikes/2026-05-14-m2-lightpanda-audit/DECISION.md).)* |
+| Tech stack | TypeScript/Node (orchestrator + canonical SDK + adapter) · Python (shim SDK) · Zig 0.15.2 *(optional, only for engine extensions in v0.1+ — v0 consumes prebuilt lightpanda binary)* |
+| v0 target | **5–6 weeks**, single engineer *(revised from 6–8 weeks post-M2-spike; M2 production drops to 2 weeks of pure TS work)* |
 
 ---
 
@@ -260,6 +260,14 @@ Outputs a 16-byte (128-bit) URL-safe base64 identifier — 22 characters, no pad
 
 **Where it runs.** In the engine, during DOM commit (after layout, before any external observer is notified). The stable_id is attached to each interactive / landmark / text node and emitted as part of snapshots. Computing it in-engine is fast (a single blake3 hash + an a11y tree walk we'd do anyway) and ensures every snapshot has stable_ids without orchestrator round-trips.
 
+> **v0 simplification (post-M2-spike).** The full hash above (with `landmark_path`, `ordinal`, `context_window`) is the *v0.1+ target*. The M2 spike ([DECISION.md](./../spikes/2026-05-14-m2-lightpanda-audit/DECISION.md)) found that lightpanda's upstream a11y tree does not yet track landmark paths (adding it requires ~150 lines of Zig patches). For **v0**, the simplified algorithm is:
+>
+> ```
+> stable_id = blake3(role || '\0' || name_norm || '\0' || xpath)[:16]
+> ```
+>
+> where `xpath` comes directly from upstream's `Accessibility.getFullAXTree` output. The xpath provides sufficient disambiguation for v0 within a single page (validated by the M2 spike PoC). `landmark_path`, `ordinal`, and `context_window` are deferred to v0.1 alongside the corresponding lightpanda patch. Where it runs also changes for v0: stable_id computation moves from *in-engine* to *orchestrator-side* (TypeScript), because we consume the prebuilt lightpanda binary unmodified. v0.1 may move it back into the engine when the landmark patch lands.
+
 **Storage and lookup.** Per-domain SQLite at `~/.husk/site-graph/{domain}.db`:
 
 ```sql
@@ -328,7 +336,9 @@ Resolution order (on agent's `click(stable_id)` call):
 
 5. **Diff after first snapshot.** Mutation observer batches DOM changes per microtask, emits diffs as `{op: "added"|"removed"|"changed", path: "...", value: ...}`. Agents maintain their own page model by applying diffs to the last full snapshot. Agent can request a full re-sync at any time via `Snapshot.capture(full=true)`.
 
-6. **Brotli on the wire.** JSON-LD compresses extremely well with brotli (textual, repetitive structure).
+   > **v0 simplification (post-M2-spike).** Upstream lightpanda implements `MutationObserver` inside V8 (472 LOC, 9 tests) but does not wire mutation events to CDP. For **v0**, the orchestrator polls `Accessibility.getFullAXTree` after each agent action and computes the diff in TypeScript. v0.1 either contributes a small upstream patch (~50 lines) that emits CDP `Page.mutationRecorded` events, or wires the in-engine MutationObserver to CDP via an orchestrator-facing subscription. See [M2 DECISION.md](./../spikes/2026-05-14-m2-lightpanda-audit/DECISION.md).
+
+6. **Brotli on the wire.** JSON-LD compresses extremely well with brotli (textual, repetitive structure). *(M2 spike PoC measured 89.1% compression on a small fixture page before brotli — see [SPIKE-REPORT §7](./../spikes/2026-05-14-m2-lightpanda-audit/SPIKE-REPORT.md).)*
 
 **Text content mode.** Per the v0 design decision, full raw text content is preserved by default (not truncated, not summarized). Snapshots accept a `text_mode` parameter on `client.snapshot({text_mode: "full" | "labels-only" | "summarized"})`:
 
@@ -678,7 +688,8 @@ The Husk name and logo are trademarks of the Husk project entity, registered sep
 
 | Package | Component | License | Version | Rationale |
 |---|---|---|---|---|
-| `lightpanda` (forked) | engine | AGPL v3 | pinned commit | Foundation |
+| `lightpanda` (prebuilt binary, v0) | engine | AGPL v3 | release 0.3.0+ | **v0 consumes prebuilt; built from `engine/upstream` only when needed.** *(Added post-M2-spike.)* |
+| `lightpanda` (forked submodule, v0.1+) | engine | AGPL v3 | pinned commit | Foundation for engine patches in v0.1+ |
 | V8 | engine (via lightpanda) | BSD | bundled | JS execution |
 | `blake3` (Zig) | engine | Apache 2.0 / MIT | latest stable | Stable-ID hashing |
 | Node.js | orchestrator | MIT | ≥ 20 LTS | Runtime |
@@ -748,7 +759,7 @@ If any gate fails, v0 does not ship; the timeline extends until it passes.
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| 1 | Lightpanda's a11y tree builder is too incomplete to base stable-ID computation on. Substantial new Zig work required. | Medium | High | Week-1 spike audits the a11y builder against our requirements. If insufficient, descope `SemanticId` v0 features and ship with raw `role + name + landmark` triples instead of hashed IDs; promote full stable-IDs to v0.1. |
+| 1 | ~~Lightpanda's a11y tree builder is too incomplete to base stable-ID computation on.~~ **RESOLVED by M2 spike.** | ~~Medium~~ | ~~High~~ | **Resolved 2026-05-14 — see [M2 DECISION.md](./../spikes/2026-05-14-m2-lightpanda-audit/DECISION.md).** Outcome: Path A — upstream is rich enough. `AXNode.getName()` ships full WAI-ARIA accessible-name computation; `Accessibility.getFullAXTree` exposes the tree via standard CDP. v0 ships orchestrator-side adapter (~80 LOC TypeScript) with zero engine patches. Landmark-path tracking deferred to v0.1. |
 | 2 | Zig learning curve discourages external contributors; PR throughput stays low | High | Medium | Keep the engine surface intentionally small (4 patch files). Document engine-level extension points thoroughly. Most PRs land on the TS orchestrator side, where contributor familiarity is high. |
 | 3 | AGPL deters some adopters (solo devs spooked by license; enterprises with policy bans) | Medium | Medium | Clear FAQ: agent code that calls Husk over HTTP is not a derivative work; only redistribution-as-service triggers AGPL. Offer commercial license for enterprises with hard AGPL policy. |
 | 4 | Web compat gaps surface during example development — Shopify breaks, complex JS apps don't load | High | High | Pick conservative example URLs (specific pinned pages we've validated). Document supported sites narrowly. Add a "compat status" page in docs tracking known-good and known-broken sites. |
