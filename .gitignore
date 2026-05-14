@@ -50,3 +50,7 @@ husk-replay-*.jsonl
 .env
 .env.*
 !.env.example
+
+# M2 spike scratch (build artifacts, captured outputs, prebuilt binaries)
+engine/spike/.scratch/
+engine/spike/node_modules/
