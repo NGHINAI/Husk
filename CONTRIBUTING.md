@@ -22,10 +22,10 @@ in [`docs/superpowers/specs/2026-05-13-husk-design.md`](./docs/superpowers/specs
 
 ## Working on the Engine
 
-The engine is a fork of [lightpanda](https://lightpanda.io) (MIT-licensed,
+The engine is a fork of [lightpanda](https://lightpanda.io) (AGPL v3,
 Zig). Upstream is pinned as a git submodule at `engine/upstream`. Our
 patches live under `engine/patches/`. Non-differentiating fixes should be
-contributed upstream as MIT PRs first, then pulled into our submodule pin.
+contributed upstream as AGPL v3 PRs first, then pulled into our submodule pin.
 
 ## Working on the Orchestrator / SDKs / MCP
 

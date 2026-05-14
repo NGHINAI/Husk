@@ -91,4 +91,4 @@ the [CLA](./CLA.md).
 
 Core: AGPL v3 ([LICENSE](./LICENSE))
 Examples and protocol schemas: MIT ([LICENSE-EXAMPLES](./LICENSE-EXAMPLES))
-Upstream lightpanda: MIT (preserved in [engine/UPSTREAM_LICENSE](./engine/UPSTREAM_LICENSE))
+Upstream lightpanda: AGPL v3 (preserved in [engine/UPSTREAM_LICENSE](./engine/UPSTREAM_LICENSE))
