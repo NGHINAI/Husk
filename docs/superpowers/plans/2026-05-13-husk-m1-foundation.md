@@ -39,7 +39,7 @@
 - Create: `engine/build.zig` — wraps upstream lightpanda build
 - Create: `engine/build.zig.zon` — Zig dependency manifest
 - Create: `engine/README.md` — engine-specific docs
-- Create: `engine/UPSTREAM_LICENSE` — copy of lightpanda's MIT LICENSE
+- Create: `engine/UPSTREAM_LICENSE` — copy of lightpanda's AGPL v3 LICENSE
 - Create: `engine/patches/.gitkeep` — placeholder for Milestone 2 patches
 - Create: `engine/tests/.gitkeep` — placeholder for Milestone 2 tests
 - Create: `engine/upstream/` — git submodule pointing to lightpanda
@@ -471,10 +471,10 @@ in [`docs/superpowers/specs/2026-05-13-husk-design.md`](./docs/superpowers/specs
 
 ## Working on the Engine
 
-The engine is a fork of [lightpanda](https://lightpanda.io) (MIT-licensed,
+The engine is a fork of [lightpanda](https://lightpanda.io) (AGPL v3,
 Zig). Upstream is pinned as a git submodule at `engine/upstream`. Our
 patches live under `engine/patches/`. Non-differentiating fixes should be
-contributed upstream as MIT PRs first, then pulled into our submodule pin.
+contributed upstream as AGPL v3 PRs first, then pulled into our submodule pin.
 
 ## Working on the Orchestrator / SDKs / MCP
 
@@ -650,7 +650,7 @@ the [CLA](./CLA.md).
 
 Core: AGPL v3 ([LICENSE](./LICENSE))
 Examples and protocol schemas: MIT ([LICENSE-EXAMPLES](./LICENSE-EXAMPLES))
-Upstream lightpanda: MIT (preserved in [engine/UPSTREAM_LICENSE](./engine/UPSTREAM_LICENSE))
+Upstream lightpanda: AGPL v3 (preserved in [engine/UPSTREAM_LICENSE](./engine/UPSTREAM_LICENSE))
 ```
 
 - [ ] **Step 4: Run verification, expect pass**
@@ -776,7 +776,7 @@ pub fn build(b: *std.Build) void {
 ```markdown
 # Husk Engine
 
-The Husk engine is a fork of [lightpanda](https://lightpanda.io) (MIT,
+The Husk engine is a fork of [lightpanda](https://lightpanda.io) (AGPL v3,
 Zig). Upstream is pinned as a git submodule at `./upstream`.
 
 ## Layout
@@ -789,7 +789,7 @@ Zig). Upstream is pinned as a git submodule at `./upstream`.
   - `a11y-tree-hooks.zig` — accessibility tree extension points
 - `tests/` — engine-level tests for our patches
 - `build.zig` — top-level build script (wraps upstream)
-- `UPSTREAM_LICENSE` — lightpanda's MIT LICENSE, preserved
+- `UPSTREAM_LICENSE` — lightpanda's AGPL v3 LICENSE, preserved
 
 ## Building
 
@@ -811,7 +811,7 @@ cd ../.. && git add engine/upstream && git commit -m "engine: bump lightpanda pi
 ## Contributing back to lightpanda
 
 Non-differentiating fixes (bugs, perf, web compat) should be sent to
-lightpanda upstream as MIT PRs first, then pulled into our pin once
+lightpanda upstream as AGPL v3 PRs first, then pulled into our pin once
 merged. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Our patches
