@@ -323,3 +323,118 @@ What actually exists in upstream that is relevant to spec §5.2:
 - Diff emission: MutationObserver exists in-browser but not wired to external transport — polling is the zero-patch alternative
 
 **Recommended path:** Build a thin orchestrator-side adapter that calls `Accessibility.getFullAXTree` (already implemented, fully functional), computes `blake3(role‖'\0'‖name_norm‖'\0'‖xpath)[:16]` as the stable ID, and emits the spec §5.2 short-key JSON-LD format. For incremental diffs, poll after each action and diff in the orchestrator. This requires **zero upstream patches** and avoids the build blocker entirely. Estimated orchestrator-side effort: ~200–300 lines in the Husk layer.
+
+## 6. Ancillary Audit (forward-looking)
+
+### Upstream MCP support
+
+- `src/mcp.zig` LOC: **10** (thin re-export facade; all logic lives in `src/mcp/`)
+- `src/mcp/` contents:
+  - `protocol.zig` — JSON-RPC 2.0 type definitions (Request, Response, Error, Tool, Resource), MCP protocol version enum (`2024-11-05` default, `2025-03-26`, `2025-06-18`, `2025-11-25` also listed), and a compile-time JSON minifier
+  - `router.zig` — message loop (`processRequests`) that reads newline-delimited JSON from stdin; routes `initialize`, `ping`, `notifications/initialized`, `tools/list`, `tools/call`, `resources/list`, `resources/read`
+  - `Server.zig` — server state (browser, session, node registry, mutex-guarded writer); initialises cookie jar from file on startup; saves cookie jar on shutdown
+  - `tools.zig` — all tool implementations and their JSON Schema input definitions
+  - `resources.zig` — MCP Resources API exposing `mcp://page/html` (serialised HTML DOM) and `mcp://page/markdown` (markdown representation) as readable resources
+
+- **Transport:** **stdio** — `router.processRequests()` reads line-delimited JSON from a `std.io.Reader` and writes newline-terminated JSON-RPC responses to a `std.io.Writer`. The server binary is launched as a subprocess by the MCP client; there is no HTTP or SSE transport.
+
+- **Protocol version announced:** `2024-11-05` (the oldest listed version is used as the default on `initialize` responses; newer versions `2025-03-26`, `2025-06-18`, `2025-11-25` are defined in the enum but not selected by default).
+
+- **Exposed tools (full list with input/output schema):**
+  - `goto(url: string!, timeout?: int, waitUntil?: "load"|"domcontentloaded"|"networkidle"|"done")` — navigates to URL; returns plain text `"Navigated successfully."`
+  - `navigate(…)` — alias for `goto`, identical schema and implementation
+  - `markdown(url?: string, timeout?: int, waitUntil?: …)` — returns the page's full markdown rendering as a single text content block; navigates first if `url` provided
+  - `links(url?: string, timeout?: int, waitUntil?: …)` — returns newline-separated list of all href values from the page; navigates first if `url` provided
+  - `evaluate(script: string!, url?: string, timeout?: int, waitUntil?: …)` — evaluates JavaScript in V8; returns the stringified result or an error content block with `isError: true` on exception
+  - `eval(…)` — alias for `evaluate`
+  - `semantic_tree(url?: string, timeout?: int, waitUntil?: …, backendNodeId?: int, maxDepth?: int)` — returns the pruned semantic tree as text (via `SemanticTree.textStringify`); `backendNodeId` scopes the tree to a subtree; `maxDepth` limits depth; `prune: true` is hardcoded
+  - `nodeDetails(backendNodeId: int!)` — returns JSON with tag, role, name, interactive, disabled, value, input_type, placeholder, href, id, class, checked, options for a single node by backend ID
+  - `interactiveElements(url?: string, timeout?: int, waitUntil?: …)` — returns JSON array of all interactive elements with their backend node IDs; also registers all returned nodes in the server's node registry
+  - `structuredData(url?: string, timeout?: int, waitUntil?: …)` — extracts JSON-LD, OpenGraph, and other structured data; returns as JSON
+  - `detectForms(url?: string, timeout?: int, waitUntil?: …)` — detects all forms on the page; returns JSON array with field names, types, required status; registers nodes
+  - `click(backendNodeId: int!)` — clicks element; returns page URL + title after click
+  - `fill(backendNodeId: int!, text: string!)` — fills text into input/textarea/select; returns confirmation with filled value + page URL + title
+  - `scroll(backendNodeId?: int, x?: int, y?: int)` — scrolls page or specific element; returns scroll position + page URL + title
+  - `waitForSelector(selector: string!, timeout?: int)` — waits for a CSS selector to appear; returns `backendNodeId` of matched element; times out with error
+  - `hover(backendNodeId: int!)` — triggers mouseover/mouseenter on element; returns page URL + title
+  - `press(key: string!, backendNodeId?: int)` — dispatches keydown + keyup for named key (e.g. `"Enter"`, `"Tab"`, `"a"`); returns page URL + title
+  - `selectOption(backendNodeId: int!, value: string!)` — selects `<select>` option by value; fires input + change events; returns confirmation
+  - `setChecked(backendNodeId: int!, checked: bool!)` — checks or unchecks checkbox/radio; fires input, change, click events; returns state + page URL + title
+  - `findElement(role?: string, name?: string)` — searches interactive elements by ARIA role and/or accessible name substring (case-insensitive); returns matching elements with backend node IDs; requires at least one of `role` or `name`
+
+- **MCP Resources (read-only):**
+  - `mcp://page/html` (MIME: `text/html`) — serialised HTML DOM of the current page
+  - `mcp://page/markdown` (MIME: `text/markdown`) — markdown representation of the current page
+
+- **Impact on our M6:**
+
+  ⚠️ **Upstream MCP exists but misses watchdog integration** — the upstream MCP server is functionally complete for a headless-browser-as-agent-tool use case: it exposes navigation, DOM extraction, JS evaluation, form interaction, accessibility queries, and structured data extraction. An agent could use it directly without any Husk wrapper. However, it has zero awareness of Husk's orchestrator policy layer (spec §5.3 watchdog: allowlist/denylist, action rate-limiting, session isolation, per-task credential scoping). Our `@husk/mcp` package therefore becomes a **watchdog-aware proxy** rather than a from-scratch MCP server: it sits in front of the upstream MCP subprocess, intercepts tool calls, enforces orchestrator policy, injects session context, and passes approved calls through to the upstream server. This is significantly smaller than building MCP from scratch. Husk MCP also needs to add two Husk-specific tools that upstream cannot provide: a `snapshot` tool (triggering the orchestrator-side `Accessibility.getFullAXTree` + stable-ID computation pipeline from T5) and a `stableId` lookup tool. All other tools can be thin proxies.
+
+### Cookies / storage
+
+- `src/cookies.zig` shape: A **cookie-file I/O layer** — `loadFromFile(session, path)` reads a JSON array of CDP `Network.Cookie` format objects and populates `session.cookie_jar`; `saveToFile(jar, path)` serialises the jar back to that format. The `JsonCookie` struct mirrors Puppeteer/Playwright's cookie export format exactly (`name`, `value`, `domain`, `path`, `expires` as float Unix timestamp, `secure`, `httpOnly`, `sameSite`). SameSite values `"Strict"` / `"Lax"` / `"None"` are parsed case-insensitively. Load is called on `Server.init`; save is called on `Server.deinit`.
+
+- `src/storage/` modules:
+  - `Storage.zig` — top-level storage selector; initialises either `Blackhole` (no-op, default) or `Sqlite` based on `Config.storageEngine()`
+  - `Blackhole.zig` — zero-op backend for ephemeral sessions; `deinit` is a no-op
+  - `sqlite/Sqlite.zig` — SQLite3 connection pool (via `Pool.zig`); `open(path)` creates/opens a WAL-mode database; `exec`, `scalar`, `prepare` helpers over sqlite3 C API
+  - `sqlite/Pool.zig` — connection pool for SQLite (acquire/release)
+  - `sqlite/migrations.zig` — minimal schema migration runner; currently only creates the `migrations` bookkeeping table (schema version 1); **no application tables defined yet** — the SQLite backend exists as infrastructure but stores nothing domain-specific
+
+- `src/browser/webapi/storage/Cookie.zig` — `Cookie` struct + `Cookie.Jar`:
+  - `Jar` holds up to 1,024 cookies per session (hard limit); `add()`, `removeExpired()`, `clearRetainingCapacity()`, `forRequest()` (path + domain matching for outgoing `Cookie:` headers), `populateFromResponse()` (parses `Set-Cookie` headers)
+  - Cookie parsing (RFC 6265-ish, browser-permissive): handles `Max-Age`, `Expires`, `Path`, `Domain`, `Secure`, `HttpOnly`, `SameSite`
+  - Security hardening: `__Host-` prefix requires `Secure`, HTTPS origin, no `Domain`, path must be `/`; `__Secure-` requires `Secure` and HTTPS; `SameSite=None` without `Secure` is rejected with `error.InsecureSameSite`
+  - Per-request filtering: checks domain suffix + path prefix + secure flag + httpOnly visibility
+
+- `src/browser/webapi/storage/storage.zig` — Web Storage API (`localStorage` / `sessionStorage`):
+  - `Shed` = the per-session Web Storage container; holds a `StringHashMap` of origin → `Bucket`
+  - `Bucket` = `{ local: Lookup, session: Lookup }` — one `localStorage` and one `sessionStorage` per origin
+  - `Lookup` implements the full Web Storage API: `getItem`, `setItem`, `removeItem`, `clear`, `key`, `length`; 5 MB per-origin quota; `QuotaExceededError` thrown on overflow
+  - JS bridge: `Storage` class (Web Storage API name) is fully bridged to V8 including `[str]` named index accessors
+  - **Per-origin isolation**: storage is keyed on the request origin string — no cross-origin access
+
+- **Capabilities summary:**
+  - Cookie jar persistence: **yes** — load from file on server init; save to file on server deinit; file path configured via `--cookie-jar` CLI flag (Config field `cookie_jar`). CDP `Network.setCookie` / `Storage.clearCookies` also operate on the live jar.
+  - SameSite handling: **yes** — `strict`, `lax`, `none` all parsed; `SameSite=None` without `Secure` rejected; case-insensitive matching
+  - HTTP-only cookies: **yes** — stored and honoured; `http_only: true` suppresses inclusion in `document.cookie` JS access
+  - localStorage / sessionStorage: **yes** — full Web Storage API with 5 MB per-origin quota and origin isolation
+  - IndexedDB: **no** — no IndexedDB implementation exists anywhere in the source tree
+  - Per-domain isolation: **yes** — `Cookie.Jar.forRequest()` enforces domain suffix + path matching; Web Storage uses origin-keyed buckets; Public Suffix List is compiled in (`src/data/public_suffix_list.zig`) for correct eTLD+1 scoping
+
+- **Impact on our v0.2 auth pillar:**
+  - **What's already there:** Playwright/Puppeteer-compatible cookie file import/export means Husk can pre-seed authenticated sessions by writing a cookie JSON file before starting the MCP server — this covers the dominant SSO scenario (federated login via cookies). The Web Storage API means auth tokens stored in `localStorage` (common for SPAs) will persist across same-origin navigations within a session. CDP `Network.setCookie` / `clearBrowserCookies` provide programmatic cookie injection without a file round-trip.
+  - **What's missing for SSO/MFA flows:** (1) IndexedDB — some auth libraries (AWS Amplify, Firebase Auth, Auth0 SPA SDK) persist tokens in IndexedDB, not localStorage. This is a hard gap; no IndexedDB implementation exists. (2) Session persistence across MCP server restarts — cookies are saved/loaded via file, but `localStorage`/`sessionStorage` contents are not persisted to disk (`Shed` is in-memory only; no SQLite serialisation is wired up despite the SQLite infrastructure existing). Restarting the server loses Web Storage state. (3) Secure cookie injection for `HttpOnly` cookies — the CDP `Network.setCookie` path does honour `httpOnly: true` so this is covered. (4) Cookie partition keys (CHIPS / `Partitioned` attribute) are noted as `not_implemented` in `domains/network.zig` — relevant for cross-site auth contexts in modern Chrome; edge case for most deployments.
+
+### Prior-art on safety / policy
+
+The `rg` search for `watchdog|sanity.?check|policy|allowlist|denylist|forbidden|forbidden_actions` across `src/` returned no matches for any watchdog, allowlist/denylist, or forbidden-action concept. The hits found were:
+
+- `src/Config.zig` — a comment noting that any User-Agent containing `"Mozilla"` is forbidden (anti-fingerprinting note, not an enforcement hook)
+- `src/network/cache/FsCache.zig` — `// Sanity check: both are cached` (an internal assertion comment)
+- `src/cdp/AXNode.zig` — `// Sanity check: lists with >9999 items are unrealistic` (bounds guard comment)
+- `src/browser/URL.zig` — `// This would be a Same-Origin Policy bypass if mishandled` (security note comment)
+- `src/browser/webapi/element/Html.zig` — `onsecuritypolicyviolation` attribute handler (Content Security Policy violation event, part of the W3C CSP API; not an internal policy hook)
+- `src/browser/js/Env.zig` — `v8.v8__Isolate__SetMicrotasksPolicy(isolate_handle, v8.kExplicit)` (V8 microtask scheduling mode; not a security policy)
+
+**None — watchdog is fully Husk's responsibility, no upstream coordination needed.** Upstream lightpanda has no concept of action allowlists, per-session rate limits, forbidden-domain lists, or orchestrator-level policy enforcement. The network layer does have `IpFilter.zig` and `Robots.zig` (robots.txt enforcement), and `WebBotAuth.zig` (bot-detection bypass credentials), but these are per-request network-level controls, not the orchestrator-level task watchdog described in spec §5.3. Husk's watchdog proxy design (sitting in front of the MCP server) is the right architecture — there is no upstream hook to extend.
+
+### Telemetry / observability (forward-looking for v0.3 cloud)
+
+Upstream ships a **lightweight proprietary telemetry system** (`src/telemetry/`):
+
+- **What it emits:** Three event types only — `run` (server start), `navigate` (per-navigation, includes `tls: bool` and `proxy: bool` flags), and `buffer_overflow` (dropped events counter). The `driver` field is always `.cdp` — MCP sessions are not separately tracked. No page load timing, no error rates, no memory metrics, no JS execution traces.
+- **Transport:** HTTP POST to `https://telemetry.lightpanda.io` — a ring buffer of 1,024 events is flushed on each network tick via `flushCallback`. Thread-safe (mutex + atomics). Drops events silently when buffer is full (increments `dropped` counter).
+- **Identity:** Persistent install ID (UUID v4) stored in `$APP_DIR/iid` file; regenerated if missing. Passed with every payload.
+- **Opt-out:** `LIGHTPANDA_DISABLE_TELEMETRY=1` env var, or Debug build mode, or `zig build test` — all disable telemetry unconditionally. No opt-in required in release builds.
+- **Provider abstraction:** `TelemetryT(comptime P: type)` is a generic wrapper that accepts any provider implementing `init`/`deinit`/`send`. The production provider is `lightpanda.zig` (HTTP POST); tests use `MockProvider`. This means a Husk-specific provider could be substituted at compile time.
+- **OpenTelemetry / structured logs:** None. No OTEL, no Prometheus metrics endpoint, no structured log format beyond lightpanda's own `log.zig` (which writes tagged log lines to stderr).
+- **Impact on v0.3 cloud Husk planning:** Upstream telemetry is too coarse for Husk's observability needs (per-task latency, token usage, action success/failure rates, session isolation metrics). For v0.3, Husk will need to instrument at the orchestrator layer — either by adding a Husk telemetry provider compiled into the engine (using the `TelemetryT` abstraction point) or, more practically, by collecting metrics in the orchestrator process itself (measuring round-trip times, action counts, and error rates against the MCP subprocess). The `TelemetryT` compile-time provider slot is a clean upstream hook if we ever want engine-side metrics without forking.
+
+### Verdict
+
+Ancillary findings impact future milestones as follows:
+
+- **M6 (`@husk/mcp`):** Scope is materially reduced. Upstream ships a complete 20-tool MCP server over stdio with the MCP 2024-11-05 protocol. Husk MCP becomes a **watchdog proxy** (~200–400 lines) rather than a full MCP implementation. The proxy must: (1) intercept tool calls and apply orchestrator allowlist/denylist + rate limits, (2) inject session credentials (cookies, localStorage seeds), (3) forward approved calls to the upstream MCP subprocess, (4) add two Husk-native tools: `snapshot` and `stableId`. All existing upstream tools (`goto`, `semantic_tree`, `click`, `fill`, `findElement`, etc.) are proxied through unchanged.
+- **v0.2 (auth pillar):** Cookie-file import (Playwright/Puppeteer format) and CDP `Network.setCookie` cover the cookie-based SSO case fully. `localStorage` / `sessionStorage` are fully implemented per-origin. The critical gap is **IndexedDB absence** — auth libraries that rely on IndexedDB (Firebase Auth, AWS Amplify, Auth0 SPA SDK) will fail silently. Plan for v0.2 must either scope out IndexedDB-dependent auth providers or document the limitation. Web Storage is not persisted across server restarts — session resumption requires re-injecting cookies via file; `localStorage` tokens will be lost on restart.
+- **v0.3 (cloud / observability):** Upstream telemetry is too coarse (3 event types, no per-task timing). Husk must instrument at the orchestrator layer. The `TelemetryT` generic provider is a clean compile-time extension point if engine-side metrics become needed later.
