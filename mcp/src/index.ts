@@ -66,10 +66,11 @@ async function runServer(): Promise<void> {
     stdio: ["pipe", "pipe", "inherit"], // stderr goes through to our stderr for debugging
   });
 
-  // Best-effort discovery of upstream version. We pass a placeholder for
-  // now; in a future version we could send a `husk_version`-like upstream
-  // call to discover. For v0 we tag with binary basename + "(unknown)".
-  const lightpandaVersion = `(prebuilt at ${binary})`;
+  // Best-effort upstream version string. For v0 we report the binary
+  // basename + "(version unknown)" — we don't shell out to `lightpanda
+  // --version` yet (v0.1 will). We deliberately avoid leaking the full
+  // filesystem path through agent-visible responses.
+  const lightpandaVersion = `${binary.split("/").pop() ?? "lightpanda"} (version unknown)`;
 
   child.on("exit", (code, signal) => {
     process.stderr.write(`[husk-mcp] lightpanda exited (code=${code} signal=${signal})\n`);

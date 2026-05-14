@@ -41,6 +41,9 @@ export async function callHuskNativeTool(
   _args: unknown,
   ctx: HuskNativeContext
 ): Promise<McpToolCallResult> {
+  // When adding a new native tool: add an entry to HUSK_NATIVE_TOOLS above
+  // AND add a matching case in this switch. Both are required — declaring
+  // the tool without a handler routes to the default error path at runtime.
   switch (name) {
     case "husk_version": {
       const payload = {
