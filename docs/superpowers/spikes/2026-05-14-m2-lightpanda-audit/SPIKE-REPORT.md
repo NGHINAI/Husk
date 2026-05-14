@@ -438,3 +438,108 @@ Ancillary findings impact future milestones as follows:
 - **M6 (`@husk/mcp`):** Scope is materially reduced. Upstream ships a complete 20-tool MCP server over stdio with the MCP 2024-11-05 protocol. Husk MCP becomes a **watchdog proxy** (~200–400 lines) rather than a full MCP implementation. The proxy must: (1) intercept tool calls and apply orchestrator allowlist/denylist + rate limits, (2) inject session credentials (cookies, localStorage seeds), (3) forward approved calls to the upstream MCP subprocess, (4) add two Husk-native tools: `snapshot` and `stableId`. All existing upstream tools (`goto`, `semantic_tree`, `click`, `fill`, `findElement`, etc.) are proxied through unchanged.
 - **v0.2 (auth pillar):** Cookie-file import (Playwright/Puppeteer format) and CDP `Network.setCookie` cover the cookie-based SSO case fully. `localStorage` / `sessionStorage` are fully implemented per-origin. The critical gap is **IndexedDB absence** — auth libraries that rely on IndexedDB (Firebase Auth, AWS Amplify, Auth0 SPA SDK) will fail silently. Plan for v0.2 must either scope out IndexedDB-dependent auth providers or document the limitation. Web Storage is not persisted across server restarts — session resumption requires re-injecting cookies via file; `localStorage` tokens will be lost on restart.
 - **v0.3 (cloud / observability):** Upstream telemetry is too coarse (3 event types, no per-task timing). Husk must instrument at the orchestrator layer. The `TelemetryT` generic provider is a clean compile-time extension point if engine-side metrics become needed later.
+
+---
+
+## 7. Proof-of-Concept Outcome
+
+- **Shape chosen:** Shape C (CDP WebSocket from Node) + Shape D (MCP stdio) — both verified
+- **Lightpanda binary used:** prebuilt `lightpanda-aarch64-macos`, release `0.3.0` (2026-05-13), Mach-O 64-bit arm64
+- **PoC file:** `engine/spike/snapshot-poc.mjs`
+- **Did it run successfully?** YES — full end-to-end, exit code 0
+
+### Lightpanda invocations confirmed
+
+```sh
+# CDP server (Shape C)
+lightpanda serve --host 127.0.0.1 --port 9222
+
+# MCP stdio server (Shape D)
+lightpanda mcp
+
+# Fetch + semantic dump (bonus one-shot path)
+lightpanda fetch --dump semantic_tree <URL>
+```
+
+### CDP methods exercised (Shape C)
+
+1. `Browser.getVersion` — confirmed Protocol-Version 1.3 / Chrome/124
+2. `Target.createTarget` — creates a fresh page (returns `targetId`)
+3. `Target.attachToTarget` (flatten: true) — multiplexed session (returns `sessionId`)
+4. `Page.enable` — enables navigation events
+5. `Accessibility.enable` — enables accessibility domain
+6. `Page.navigate` — navigates to fixture URL; emits `Page.frameNavigated`, `Page.loadEventFired`
+7. `Accessibility.getFullAXTree` — returns 57 nodes for the fixture page
+
+### MCP tools exercised (Shape D)
+
+`tools/list` returned 20 tools: `goto`, `navigate`, `markdown`, `links`, `evaluate`, `eval`, `semantic_tree`, `nodeDetails`, `interactiveElements`, `structuredData`, `detectForms`, `click`, `fill`, `scroll`, `waitForSelector`, `hover`, `press`, `selectOption`, `setChecked`, `findElement`.
+
+`goto` + `semantic_tree` confirmed working — returns a compact human-readable tree with `[i]` (interactive), `[i:disabled]` (disabled) annotations.
+
+### First 30 lines of CDP PoC output
+
+```
+[poc] connecting to lightpanda CDP: ws://127.0.0.1:9222/
+[poc] connected
+[poc] created target: FID-0000000001
+[poc] session: SID-1
+[poc] domains enabled
+[poc] navigating to http://127.0.0.1:8765/fixture.html
+[poc] navigation frameId: FID-0000000001 loaderId: LID-0000000001
+[poc] calling Accessibility.getFullAXTree...
+[poc] raw AXTree: 57 nodes, 15016 bytes
+[poc] spec-§5.2 snapshot: 1635 bytes (89.1% smaller than raw)
+
+[poc] === SNAPSHOT OUTPUT ===
+{
+  "@context": "https://schema.husk.dev/semantic-snapshot/v0",
+  "@type": "SemanticSnapshot",
+  "url": "http://127.0.0.1:8765/fixture.html",
+  "capturedAt": "2026-05-14T22:03:45.469Z",
+  "engine": "lightpanda/0.3.0",
+  "method": "CDP/Accessibility.getFullAXTree",
+  "note": "PoC — stable_id uses SHA-256 substr, not blake3; no bounding rects; no landmark_path",
+  "tree": {
+    "i": "RootWebArea:ksZ05PGCSC5T",
+    "r": "RootWebArea",
+    "n": "Husk M2 Spike Fixture",
+    "s": ["f"],
+    "c": [
+      { "i": "banner:_q4dK946Wdot", "r": "banner", "c": [
+          { "i": "heading:2vjgvHhmVqIT", "r": "heading", "n": "Husk Spike Fixture Page" }
+        ]
+      },
+      ...
+```
+
+### What it demonstrates
+
+We can drive lightpanda end-to-end using **only upstream's existing CDP methods** — no engine patches, no source build, no Zig required — to produce a spec-§5.2-shaped semantic snapshot. The prebuilt binary bypasses the V8/Xcode build blocker entirely. The orchestrator-side adapter (skip-through passthrough roles, stableId from role+name, state flags from property presence/absence) is ~80 lines of pure Node.
+
+### Non-obvious discovery: disabled state encoding
+
+The AX tree does **not** use an explicit `disabled` property. Disabled state is signalled by the **absence** of `focusable` on normally-interactive roles (button, link, textbox, etc.). An enabled `button` has `properties: [{name:"invalid",...},{name:"focusable",value:true}]`; a disabled `button` has only `[{name:"invalid",...}]`. The orchestrator adapter must encode this heuristic explicitly.
+
+### Non-obvious discovery: passthrough roles
+
+The AX tree wraps the semantic tree in `none`/`generic`/`StaticText`/`InlineTextBox` nodes (corresponding to `<html>`, `<body>`, `<div>`, raw text). A naive child-filter that drops these nodes produces a flat single-node output. The fix is a skip-through traversal: filter the node from output but recurse into its children to collect semantic descendants.
+
+### What it does NOT demonstrate
+
+- **blake3 stable_id:** PoC uses SHA-256/base64url slice; production requires blake3 for collision resistance at scale
+- **bounding rects:** `Accessibility.getFullAXTree` has no geometry; would require `DOM.getBoxModel` per node or a custom CDP extension
+- **landmark_path:** T3 finding stands — ~150 lines of upstream work still needed; the PoC omits it
+- **MutationObserver → CDP event:** incremental updates not demonstrated; PoC re-fetches full tree
+- **`file://` protocol:** unsupported by lightpanda; pages must be served over HTTP
+
+### Key numbers
+
+| Metric | Value |
+|--------|-------|
+| Raw `Accessibility.getFullAXTree` | 57 nodes, 15 016 bytes |
+| Spec-§5.2 snapshot (CDP path) | 1 635 bytes (89.1% reduction) |
+| `fetch --dump semantic_tree` | 8 355 bytes (includes xpath, isDisabled, attributes) |
+| MCP `semantic_tree` text | ~640 bytes (human-readable, not machine-structured) |
+| Adapter code (skip-through + transform) | ~80 lines of Node |
+| Lightpanda binary size | ~50 MB (arm64 Mach-O) |
