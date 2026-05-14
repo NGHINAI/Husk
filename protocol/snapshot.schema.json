@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://husk.dev/schemas/snapshot.schema.json",
+  "title": "Husk Snapshot",
+  "description": "Compressed JSON-LD page representation. Milestone 1 stub; full schema defined in Milestone 4.",
+  "type": "object",
+  "required": ["v", "nodes"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "description": "Snapshot format version",
+      "const": 0
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

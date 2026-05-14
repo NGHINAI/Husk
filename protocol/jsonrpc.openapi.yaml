@@ -1,0 +1,80 @@
+openapi: 3.1.0
+info:
+  title: Husk JSON-RPC API
+  version: 0.0.0
+  description: |
+    JSON-RPC 2.0 over HTTP/2. Single source of truth for the agent ↔
+    orchestrator boundary. SDKs are generated against this spec.
+
+    Milestone 1: stub with only a health-check method. Full method
+    surface defined in Milestone 3 (`create_session`, `goto`, `snapshot`,
+    `act`, `close_session`) and Milestone 5 (`set_policy`).
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:7777
+    description: Local orchestrator (default)
+
+paths:
+  /v1/jsonrpc:
+    post:
+      summary: JSON-RPC 2.0 endpoint
+      operationId: jsonrpc
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequest"
+      responses:
+        "200":
+          description: JSON-RPC response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+
+components:
+  schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        method:
+          type: string
+          enum: [health]
+          description: |
+            Milestone 1 supports only `health`. M3 adds session, M5 adds
+            policy, M6 adds tool-manifest helpers.
+        params:
+          type: object
+        id:
+          oneOf: [{ type: string }, { type: integer }]
+
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        result: {}
+        error:
+          $ref: "#/components/schemas/JsonRpcError"
+        id:
+          oneOf: [{ type: string }, { type: integer }, { type: "null" }]
+
+    JsonRpcError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data: {}

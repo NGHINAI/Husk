@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://husk.dev/schemas/policy.schema.json",
+  "title": "Husk Watchdog Policy",
+  "description": "Per-session watchdog policy rules. Milestone 1 stub; full schema defined in Milestone 5.",
+  "type": "object",
+  "required": ["flow"],
+  "properties": {
+    "flow": { "type": "string" },
+    "forbidden": { "type": "array" },
+    "required_before": { "type": "array" },
+    "allow_domains": { "type": "array", "items": { "type": "string" } },
+    "deny_domains": { "type": "array", "items": { "type": "string" } }
+  }
+}
