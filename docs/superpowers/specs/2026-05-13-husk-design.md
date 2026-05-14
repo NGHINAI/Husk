@@ -7,7 +7,7 @@
 | Date | 2026-05-13 |
 | License | AGPL v3 (core) · MIT (examples, protocol schemas) · CLA required for external contributions |
 | Project root | `/Users/nirmalghinaiya/Desktop/husk/` |
-| Engine basis | Fork of [lightpanda](https://lightpanda.io) (MIT) |
+| Engine basis | Fork of [lightpanda](https://lightpanda.io) (AGPL v3) |
 | Tech stack | Zig (engine) · TypeScript/Node (orchestrator + canonical SDK) · Python (shim SDK) |
 | v0 target | 6–8 weeks, single engineer |
 
@@ -55,7 +55,7 @@ Every production "AI agent browser" today is a wrapper around full Chromium driv
 | **browser-use** | MIT | Playwright wrapper | Python agent loop | LLM-bundled, hard to use library-only |
 | **Skyvern** | AGPL | Playwright wrapper | Vision-first agent | Closest peer for licensing model |
 | **Steel.dev / steel-browser** | Apache | Stock Chromium | Managed cloud | |
-| **lightpanda** | MIT | Own engine (Zig + V8) | Engine only | The foundation we fork — does not ship agent-side primitives |
+| **lightpanda** | AGPL v3 | Own engine (Zig + V8) | Engine only | The foundation we fork — does not ship agent-side primitives. License is aligned with Husk's core (both AGPL). |
 | **Husk (this project)** | AGPL | Forked lightpanda | Watchdog wedge → all 3 pillars | The only player at the intersection of "real engine" + "agent-purpose-built" + "AGPL OSS" |
 
 The position is empty. No one is shipping a real browser engine for agents under a strong-copyleft license with a deterministic safety floor as the v0 wedge.
@@ -569,7 +569,7 @@ husk/                                # monorepo root
 │   │   └── a11y-tree-hooks.zig
 │   ├── tests/
 │   ├── build.zig
-│   └── UPSTREAM_LICENSE             # lightpanda MIT, preserved
+│   └── UPSTREAM_LICENSE             # lightpanda AGPL v3, preserved
 ├── orchestrator/                    # TypeScript — Node binary
 │   ├── src/
 │   │   ├── http/                    # Hono HTTP server, JSON-RPC endpoints
@@ -648,13 +648,15 @@ All Husk-written code under AGPL v3. This:
 - Customers can copy-paste example agent code into their proprietary codebases without contaminating it.
 - Other tools can implement the Husk protocol without taking on AGPL obligations.
 
-### Lightpanda upstream: MIT, preserved
+### Lightpanda upstream: AGPL v3, aligned
 
-Lightpanda is MIT-licensed. We respect that:
+Lightpanda is AGPL v3-licensed (per their [`LICENSING.md`](https://github.com/lightpanda-io/browser/blob/main/LICENSING.md)). This is the same license we chose for Husk's core, so the upstream/fork relationship is license-aligned by default — no compatibility analysis or relicensing dance required.
 
-- `engine/UPSTREAM_LICENSE` contains lightpanda's full LICENSE text.
-- Non-differentiating fixes (bug fixes, perf improvements unrelated to our pillars) are contributed back upstream as MIT PRs.
-- Our additive patches (`Snapshot` domain, `SemanticId` domain, mutation observer aggregator, a11y tree hooks) live in `engine/patches/` and are AGPL-licensed as part of Husk.
+- `engine/UPSTREAM_LICENSE` contains lightpanda's full LICENSE text (AGPL v3).
+- Non-differentiating fixes (bug fixes, perf improvements unrelated to our pillars) are contributed back upstream as AGPL v3 PRs.
+- Our additive patches (`Snapshot` domain, `SemanticId` domain, mutation observer aggregator, a11y tree hooks) live in `engine/patches/` and are AGPL v3 under Husk's copyright (assigned via our CLA).
+
+**Implication for dual-licensing strategy:** the orchestrator, SDKs, MCP bridge, protocol schemas, and examples are all under our CLA and remain dual-licensable later if needed (e.g., for an enterprise commercial license). The engine layer is AGPL by virtue of upstream's license; dual-licensing the engine itself would require coordination with lightpanda upstream (or replacing the engine, which is what the v2.0 hybrid-engine milestone with stripped Chromium would enable). For v0–v0.3, this is not a constraint — the planned cloud-hosted Husk business model assumes AGPL throughout.
 
 ### CLA
 
@@ -676,7 +678,7 @@ The Husk name and logo are trademarks of the Husk project entity, registered sep
 
 | Package | Component | License | Version | Rationale |
 |---|---|---|---|---|
-| `lightpanda` (forked) | engine | MIT | pinned commit | Foundation |
+| `lightpanda` (forked) | engine | AGPL v3 | pinned commit | Foundation |
 | V8 | engine (via lightpanda) | BSD | bundled | JS execution |
 | `blake3` (Zig) | engine | Apache 2.0 / MIT | latest stable | Stable-ID hashing |
 | Node.js | orchestrator | MIT | ≥ 20 LTS | Runtime |
@@ -786,7 +788,7 @@ Items deferred to implementation or revisit:
 | **Tool manifest** | LLM-tool-calling format (OpenAI / Anthropic / JSON Schema) describing Husk's operations. Generated from the public protocol. |
 | **a11y tree** | Accessibility tree — the semantic-only view of a page that screen readers see. Pruned of layout-only DOM noise by the engine. |
 | **Landmark** | ARIA landmark role (`main`, `navigation`, `search`, `form`, `dialog`, `banner`, `contentinfo`, `region`, `complementary`). Structural anchor used in stable-ID computation. |
-| **Lightpanda** | The upstream open-source browser engine (Zig + V8) we fork. MIT-licensed. |
+| **Lightpanda** | The upstream open-source browser engine (Zig + V8) we fork. AGPL v3-licensed. |
 
 ---
 
