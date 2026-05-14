@@ -267,3 +267,59 @@ The critical stubs to note:
 4. **`DOMSnapshot`** is entirely absent. The spec's custom `Snapshot` domain was proposed precisely because `DOMSnapshot.captureSnapshot` was expected to be missing — this confirms that assumption. Our `Snapshot` custom domain will need to be added.
 
 The most important implemented method is **`Accessibility.getFullAXTree`** (`accessibility.zig:44`): it directly exposes the WAI-ARIA role/name tree that spec §5.1 requires for stable-ID computation, making the custom `SemanticId` CDP domain potentially redundant. The most important missing method is **`DOMSnapshot.captureSnapshot`** (absent entirely): confirms the `Snapshot` custom domain addition is necessary and cannot be avoided by falling back to an upstream CDP method.
+
+## 5. Snapshot Facilities (spec §5.2)
+
+### Existing snapshot binary
+
+- **Binary:** `main_snapshot_creator.zig` (47 lines; standalone entrypoint compiled as a separate binary by the build system)
+- **Invocation pattern:** `./snapshot_creator [output_file]` — zero positional args writes to stdout; one positional arg writes to that file path (`std.fs.cwd().createFile(n, .{})` at line 37). No other CLI flags.
+- **Output format:** **Binary V8 startup blob** — NOT JSON, NOT DOM snapshot. The file is a length-prefixed binary: `[data_start: usize (little-endian)]` followed by raw V8 `StartupData` bytes (`Snapshot.write()` at `browser/js/Snapshot.zig:104–106`). This is V8's internal serialised heap format for fast isolate startup (equivalent to `d8 --snapshot`).
+- **What it emits (read from source):**
+  - A serialised V8 `Isolate` heap containing pre-warmed JS contexts (one `PageJsApis` / `Window` context + one `WorkerJsApis` / `WorkerGlobalScope` context)
+  - All function templates for every Web API type in `JsApis` (200+ types: DOM, fetch, crypto, canvas, CSS, events, etc.)
+  - Prototype chains and property descriptors for every JS-exposed class
+  - External references array (function pointer table used to patch V8 callbacks across restarts)
+  - **No DOM content.** No HTML. No element nodes. No accessibility tree. No text. Purely the JS runtime environment pre-warmed for fast `Browser.init()`.
+- **Semantic depth:** None — this binary has **no relationship to DOM or accessibility snapshots**. It is a V8 JIT warm-start optimisation used internally by `App.zig` at startup (`lp.js.Snapshot.load()` / `lp.js.Snapshot.create()`). The word "snapshot" is overloaded: V8's startup-snapshot concept vs. the DOM-snapshot concept in spec §5.2 are entirely different things.
+
+### Spec §5.2 alignment
+
+| Spec §5.2 element | Present in upstream snapshot? | Notes / Evidence |
+|---|---|---|
+| Stable IDs per element | **No** | `main_snapshot_creator.zig` emits no DOM nodes at all; it is a V8 binary blob. No stable-ID field exists anywhere in `SemanticTree.NodeData` or `NodeDetails` (confirmed T3). |
+| Role per element | **No** (in snapshot binary) / **Yes** (in SemanticTree JSON) | The V8 blob has no role data. `SemanticTree.jsonStringify()` emits `role` per node (`SemanticTree.zig:44`), but this is a live tree query, not a stored snapshot file. |
+| Accessible name | **No** (in snapshot binary) / **Yes** (in SemanticTree JSON) | Same as role — present in `SemanticTree` live output (`NodeDetails.name`, `AXNode.getName()`), absent from the V8 blob. |
+| State flags (enabled/visible/etc) | **No** (in snapshot binary) / **Yes** (in SemanticTree live output) | `NodeData` carries `interactive`, `disabled`, `checked` (`SemanticTree.zig:92–104`); not in V8 blob. |
+| Bounding rect | **No** | Not in V8 blob. Not in `NodeData` or `NodeDetails` struct fields. Faux-layout `getBoundingClientRect()` exists on Element but is not surfaced by SemanticTree (confirmed T3). |
+| Diff emission (incremental) | **No** (as a snapshot format feature) / **Yes** (as a JS Web API) | `MutationObserver` is fully implemented as a Web API (`browser/webapi/MutationObserver.zig`, 472 lines): `observe()`, `disconnect()`, `takeRecords()`, `deliverRecords()`, `notifyAttributeChange()`, `notifyCharacterDataChange()`, `notifyChildListChange()`. `Frame.domChanged()` increments `page.dom_version` on every DOM mutation (`Frame.zig:1464`). However, there is **no orchestrator-facing diff emission** — MutationObserver callbacks fire inside the JS sandbox (V8), not as CDP events or MCP notifications. No CDP event type for DOM changes is wired to the external transport. |
+| Text content (preserved in full) | **No** (in snapshot binary) / **Yes** (in SemanticTree JSON) | `SemanticTree` emits `name` (accessible name, which may include text content) and `value` per node. Raw text node content is available via `CData.Text.getWholeText()` but is only emitted for StaticText nodes in the tree walk. |
+| Short-key encoding (`i`,`r`,`n`,`s`,`b`,`c`) | **No** | Neither the V8 blob nor `SemanticTree.jsonStringify()` uses compressed keys. `SemanticTree` uses verbose keys: `nodeId`, `backendDOMNodeId`, `nodeName`, `xpath`, `nodeType`, `isInteractive`, `isDisabled`, `role`, `name`, `value`, `attributes`, `checked`, `options`, `children` (documented in T3 §Public API surface). |
+
+### Mutation observer / DOM change tracking
+
+Upstream has a **complete in-browser `MutationObserver` implementation** (`src/browser/webapi/MutationObserver.zig`, 472 lines) that fires correctly on child-list changes, attribute mutations, and character-data changes, with `subtree` and `attributeFilter` options. Tests exist under `src/browser/tests/mutation_observer/` (9 test HTML files). `Frame.hasMutationObservers()` / `Frame.domChanged()` / `Frame.childListChange()` / `Frame.characterDataChange()` are the Zig-side hooks that trigger observer delivery (`Frame.zig:1353–3469`).
+
+However, this is a **JS-sandbox-internal API only**. MutationObserver callbacks execute inside V8 via `deliverRecords()` (`MutationObserver.zig:353`). There is no mechanism to surface those records through CDP events or MCP notifications to an external orchestrator. `Frame.domChanged()` only increments `page.dom_version` and schedules intersection checks — it does not emit any CDP event. To implement spec §5.2's incremental diff emission, we would need to either:
+- Add a CDP event (e.g., `LP.domMutationRecords`) that the Zig side fires after `MutationObserver.deliverRecords()`, or
+- Poll `Accessibility.getFullAXTree` after each action and diff in the orchestrator.
+
+The polling approach requires zero upstream changes. The CDP event approach requires a small patch (~50 lines) to `Frame.zig` + `domains/lp.zig`.
+
+### Verdict
+
+❌ **Snapshot facility lacks required data** — the name `main_snapshot_creator.zig` is misleading. The binary creates a **V8 JS engine startup blob** with no DOM content whatsoever. It has no relationship to the spec §5.2 JSON-LD semantic snapshot format.
+
+What actually exists in upstream that is relevant to spec §5.2:
+
+1. **`SemanticTree.jsonStringify()`** — a live DOM→JSON serialiser that emits role, accessible name, state, xpath, and children per node. This is the closest thing to a DOM snapshot, but it uses verbose keys, has no stable IDs, no bounding rects (in NodeData), and no diff facility. It requires a live browser session (cannot produce an offline snapshot file from saved HTML).
+
+2. **`MutationObserver` Web API** — a complete in-browser implementation that tracks DOM changes, but callbacks fire inside V8 and are not externally observable via CDP or MCP.
+
+**Missing data for spec §5.2 compliance:**
+- Stable `i` field (16-byte blake3 ID): absent — must be computed orchestrator-side or added as upstream patch (~20 lines in `SemanticTree`)
+- Short-key encoding (`i`,`r`,`n`,`s`,`b`,`c`): absent — requires a new serialiser (thin adapter layer in orchestrator, ~100 lines)
+- Bounding rect `b` field: faux-layout only, not in NodeData — not fixable without a real layout engine; should be omitted from §5.2 or computed differently
+- Diff emission: MutationObserver exists in-browser but not wired to external transport — polling is the zero-patch alternative
+
+**Recommended path:** Build a thin orchestrator-side adapter that calls `Accessibility.getFullAXTree` (already implemented, fully functional), computes `blake3(role‖'\0'‖name_norm‖'\0'‖xpath)[:16]` as the stable ID, and emits the spec §5.2 short-key JSON-LD format. For incremental diffs, poll after each action and diff in the orchestrator. This requires **zero upstream patches** and avoids the build blocker entirely. Estimated orchestrator-side effort: ~200–300 lines in the Husk layer.
