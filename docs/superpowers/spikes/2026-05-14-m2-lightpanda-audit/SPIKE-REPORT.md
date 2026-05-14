@@ -70,3 +70,117 @@
 ### Observations
 
 `SemanticTree.zig` already implements the exact accessibility-tree extraction that Husk's AI-agent layer needs — including pruning modes, xpath generation, interactivity classification, and both JSON and text serialisers — meaning Husk does not need to build this from scratch, only wrap or extend it. The `src/mcp/` directory is a fully functioning MCP server built into lightpanda that already exposes `semantic_tree`, `markdown`, `links`, `evaluate`, and `goto` as MCP tools; this directly affects the M6 obsolescence question (our planned Husk MCP layer would largely duplicate what already exists). The `src/html5ever/` directory reveals a Rust/C-ABI boundary that is opaque to Zig tooling — any patches touching the HTML parser must account for a separate Rust build step, which adds cross-language build complexity beyond the V8 blocker already identified in Task 1.
+
+## 3. SemanticTree Audit (spec §5.1 viability)
+
+### File stats
+- `src/SemanticTree.zig`: 772 lines
+- Related files read in full:
+  - `src/cdp/AXNode.zig`: 1,594 lines — WAI-ARIA role/name computation engine; fed directly into SemanticTree
+  - `src/browser/interactive.zig`: 578 lines — interactivity classification, listener-target map
+  - `src/mcp/tools.zig`: 1,243 lines — MCP tool dispatch layer that surfaces SemanticTree to callers
+  - `src/browser/webapi/Element.zig` (excerpted) — `getBoundingClientRect` / `calculateDocumentPosition` faux-layout
+
+### Data shape (what each semantic-tree node carries)
+
+| Spec §5.1 requirement | Available in upstream? | Notes / Evidence (file:line) |
+|---|---|---|
+| Role | **Yes** | `AXNode.getRole()` (`cdp/AXNode.zig:1277`) returns either the explicit `role=` attribute or an implicit role derived from a 60+ entry tag→AXRole enum (`cdp/AXNode.zig:637–793`). Covers full HTML semantics including landmark-adjacent tags (`nav`→`navigation`, `main`→`main`, `aside`→`complementary`, `header`→`banner`, `footer`→`contentinfo`, `section`→`region`, `dialog`→`dialog`, plus all form, table, heading, and text roles). ARIA role override respected. Known gap: `<header>`/`<footer>` inside sectioning content should map to `none` but unconditionally maps to `banner`/`contentinfo` (comment at `cdp/AXNode.zig:665,670`). `<section>` always maps to `region` even without an accessible name (comment at `cdp/AXNode.zig:675`). |
+| Accessible name (WAI-ARIA computed) | **Yes — partial** | `AXNode.getName()` and `AXNode.writeName()` (`cdp/AXNode.zig:824,862`) implement the WAI-ARIA accname precedence chain: `aria-labelledby` (with multi-ID space-separated concatenation) → `aria-label` → `<label for=...>` / wrapping `<label>` → `alt` → tag-specific value fallback (button/submit/reset input uses `value`) → text-content fallback → `title` → `placeholder`. Source enum `AXSource` tracks which rule fired (`cdp/AXNode.zig:812`). **Gap 1:** text-content fallback (`writeAccessibleNameFallback`) recurses into children and handles inline `<img alt>` and SVG `<title>` but does **not** recursively resolve ARIA roles on children (not full accname spec §4.3). **Gap 2:** `writeName` contains `// TODO Check for <label>` comments for `<input type=text/password/etc>` (`cdp/AXNode.zig:953–955`) — label resolution is only implemented for labellable tags that pass `isLabellableTag` (button, meter, output, progress, select, textarea, input). In practice this covers most real-world cases. `getName()` returns `null` (not empty string) when no name resolves, which the stable-ID hasher would need to handle. |
+| Landmark path | **No** | The words "landmark" and "landmark_path" appear **zero times** in the entire source tree (`rg -i landmark src/` returned no hits). Landmark roles (`navigation`, `main`, `banner`, `contentinfo`, `region`, `complementary`, `form`, `dialog`, `search`) are present as role values but there is no data structure tracking the chain of ancestor landmarks from root to element. The walk function in `SemanticTree.zig` passes `parent_name` down for StaticText deduplication but nothing equivalent for landmark ancestry. Deriving it would require: (a) walking each node's DOM ancestors at query time, (b) checking whether each ancestor's role is a landmark, and (c) concatenating them — feasible to add, but nothing exists today. |
+| Ordinal (index among siblings of same role in landmark) | **Partial — derivable** | Within each `walk()` call (`SemanticTree.zig:266–280`), a `tag_counts` `StringArrayHashMap` is maintained per parent node — it counts how many children of each tag name have been seen before the current child, and the resulting 1-based `index` is passed to `appendXPathSegment()` to produce xpath like `/div[3]`. This gives index-among-same-tag-siblings, not index-among-same-**role**-siblings-within-a-landmark. Roles and tags are not the same (e.g., two `<a>` and one `<button>` would all count as separate tag groups but all have `button`/`link` roles). Computing role-based ordinal within a landmark scope requires landmark-path tracking (above) first, then a parallel counter per (landmark, role) pair. Not present; medium complexity to add. |
+| Context window (5 words before + 5 after) | **No** | No concept of context window exists. The tree walk in `SemanticTree.zig:113–288` emits nodes but does not maintain a running text buffer of surrounding siblings or preceding/following text nodes. Text content is available on demand via `CData.Text.getWholeText()` and `Element.getInnerText()`, and the DOM's `childrenIterator()` / `nextSibling()` / `firstChild()` chain is walkable, so the raw ingredients are present. But extracting "5 words preceding + 5 following" requires: (a) collecting the flattened in-order text of the document, (b) locating the current node's text span within that sequence, and (c) slicing a 5-word window on either side. That computation does not exist anywhere in the codebase. |
+| State (enabled, visible, checked, etc.) | **Yes** | Per-node `NodeData` struct (`SemanticTree.zig:92–104`) carries `interactive: bool`, `disabled: bool`, `checked: ?bool`. Visibility is enforced at walk time via `el.checkVisibilityCached()` (`SemanticTree.zig:133`) — invisible nodes are pruned before they reach the visitor, so all emitted nodes are implicitly visible. The AXNode property system (`cdp/AXNode.zig:280–465`) additionally computes: `disabled`, `focusable`, `editable`, `multiline`, `readonly`, `required`, `invalid`, `expanded`, `selected`, `checked`, `level`, `orientation`, `multiselectable`, `settable`, `hasPopup`. `aria-hidden` / `hidden` / `inert` / CSS `display:none` / `visibility:hidden` are all checked and cause node exclusion (`cdp/AXNode.zig:1138–1160`). |
+| Bounding rect (for click coordinates) | **Partial — faux layout** | `Element.getBoundingClientRect()` exists (`browser/webapi/Element.zig:1196`) and is called. However the underlying `calculateDocumentPosition()` is a **faux-layout heuristic** (`Element.zig:1335`): it walks the DOM tree counting preceding nodes and multiplies by 5px/node for y, with a parallel sibling-count method for x. There is no CSS layout engine, no inline/block formatting context, no floats or flexbox. The comment explicitly describes this as "faux-layout" (`Element.zig:1161`). Bounding rects are not exposed through `SemanticTree.zig` or `NodeDetails` at all — the `NodeData` and `NodeDetails` structs have no `rect` field. For click dispatch lightpanda uses `actions.click()` which fires DOM events on the node directly without needing pixel coordinates. So: bounding rect **exists** as an API but is (a) faux, not real layout, and (b) not surfaced in the semantic tree output. |
+
+### Public API surface
+
+**`SemanticTree.zig`** (struct `Self`):
+```
+// Constructor fields (set inline on struct literal):
+dom_node: *Node
+registry: *CDPNode.Registry
+frame: *Frame
+arena: std.mem.Allocator
+prune: bool = true            // prune structural roles unless interactive/labelled
+interactive_only: bool = false // emit only interactive + content roles with names
+max_depth: u32 = maxInt(u32)-1
+
+// Serializers:
+pub fn jsonStringify(self, jw: *std.json.Stringify) error{WriteFailed}!void
+pub fn textStringify(self, writer: *std.Io.Writer) error{WriteFailed}!void
+
+// Per-node detail lookup (static):
+pub fn getNodeDetails(arena, node, registry, frame) !NodeDetails
+```
+
+**`NodeDetails`** struct (returned by `getNodeDetails`):
+```
+backendNodeId: CDPNode.Id
+tag_name: []const u8
+role: []const u8
+name: ?[]const u8
+interactive: bool
+disabled: bool
+value: ?[]const u8
+input_type: ?[]const u8
+placeholder: ?[]const u8
+href: ?[]const u8
+id: ?[]const u8
+class: ?[]const u8
+checked: ?bool
+options: ?[]OptionData
+
+pub fn jsonStringify(self, jw) !void
+```
+
+**`cdp/AXNode.zig`** (struct `AXNode`):
+```
+pub fn fromNode(dom: *DOMNode) AXNode
+pub fn getRole(self) ![]const u8         // returns ARIA role string
+pub fn getName(self, frame, allocator) !?[]const u8   // WAI-ARIA computed name
+```
+
+**MCP tools layer** (`mcp/tools.zig`) — exposed over JSON-RPC 2.0:
+- `semantic_tree` — text serialisation, optional `backendNodeId` root + `maxDepth`
+- `nodeDetails` — per-node detail lookup by `backendNodeId`
+- `interactiveElements` — flat list from `interactive.collectInteractiveElements()`
+- `findElement` — filter by role and/or accessible name substring
+- `click`, `fill`, `scroll`, `hover`, `press`, `selectOption`, `setChecked` — DOM mutation tools
+- `goto`/`navigate`, `markdown`, `links`, `evaluate`/`eval`, `structuredData`, `detectForms`, `waitForSelector`
+
+JSON output per node (from `JsonVisitor.visit`): `nodeId`, `backendDOMNodeId`, `nodeName`, `xpath`, `nodeType`, `isInteractive`, `isDisabled` (optional), `role`, `name` (optional), `value` (optional), `attributes` (all raw HTML attributes), `checked` (optional), `options` (optional), `children` (recursive array).
+
+### Gaps for spec §5.1
+
+**`landmark_path` — absent (medium effort)**
+Nothing in the codebase tracks the chain of ARIA landmark ancestors. Adding it requires:
+1. Defining a `landmark_roles` static set (the ~9 ARIA landmarks — can reuse/extend the existing `isStructuralRole` or `isContentRole` maps in `interactive.zig`).
+2. Modifying `SemanticTree.walk()` to thread an accumulated landmark-path slice down through recursive calls (similar to how `parent_name` is already threaded, but as a growable path string).
+3. Making that path available on `NodeData` and emitting it in `JsonVisitor`/`TextVisitor`.
+Estimated size: ~100–150 lines of Zig. Risk: low (additive change, no existing logic broken). This is a **small** patch.
+
+**`ordinal` within landmark — absent (small-medium effort, depends on landmark_path)**
+Once landmark path is available, ordinal requires tracking a `(landmark_path, role) → u32` counter map alongside `tag_counts` in `walk()`. The existing `tag_counts` pattern shows exactly how to do this; the landmark-scoped variant adds one extra grouping key. Estimated size: ~50 extra lines. However it cannot be done without `landmark_path` first.
+
+**`context_window` — absent (medium effort)**
+No flattened-text buffer exists. Options:
+- Option A: In a pre-pass, walk the full DOM and build an ordered `[]TextSpan` slice (node pointer + text). Then in `walk()`, binary-search for the current node's position and slice ±5 words. Clean but requires a pre-pass allocating O(n) spans.
+- Option B: In `walk()`, for each visited node use `node.nextSibling()` / `node.previousSibling()` to walk up to 5 text tokens in each direction on the fly. Cheaper but misses text across element boundaries correctly.
+Neither option exists today. Estimated size: ~150–200 lines. Risk: medium (text tokenisation logic must be tested).
+
+**Accessible name completeness — partial gaps (small effort)**
+The two `// TODO` comments at `cdp/AXNode.zig:953–955` for `<input>` label resolution are the main outstanding gap. However `isLabellableTag` already includes `.input` so the gap is only for inputs that fall through the tag-switch and reach the `else` branch. In practice this means generic text/email/tel/url inputs without a `<label>` or `aria-label` may return `null` where a `<label>` exists. Fix: extend `isLabellableTag` handling in `writeName()` for those input types. Estimated size: ~20 lines.
+
+**Bounding rect — faux (not fixable without a layout engine)**
+The faux layout is documented as intentional — lightpanda has no CSS layout engine. For the stable-ID spec §5.1 this does not matter (bounding rect is not an input to the hash). For click dispatch the existing event-firing approach (`actions.click()` fires directly on the node) is sufficient. This gap is irrelevant for the stable-ID computation but relevant if any Husk feature needs pixel-accurate hit testing.
+
+### Verdict
+
+⚠️ **Partial** — descope to a smaller stable-ID surface.
+
+Full spec §5.1 hashing (`role ‖ name_norm ‖ landmark_path ‖ ordinal ‖ context_window`) is **not** implementable without upstream patches, because `landmark_path`, `ordinal`, and `context_window` are entirely absent.
+
+However, a descoped stable-ID of `blake3(role ‖ '\0' ‖ name_norm ‖ '\0' ‖ xpath)[:16]` is **immediately implementable** with zero upstream changes: `role` and `name` (WAI-ARIA computed) are already emitted per node in the JSON output, and `xpath` is already computed and emitted (`appendXPathSegment` at `SemanticTree.zig:327`). The xpath string (e.g. `/html[1]/body[1]/main[1]/section[2]/button[1]`) provides structural uniqueness almost equivalent to `landmark_path + ordinal` in most documents, with the advantage of being already present. Stability degrades only on dynamic pages where elements are inserted mid-list — the same class of instability that `landmark_path + ordinal` partially addresses.
+
+The three missing inputs (`landmark_path`, `ordinal`, `context_window`) are additive — they can be patched into `SemanticTree.zig` and `NodeData` without changing any existing fields or callers. Total patch estimate: **~300–400 lines of Zig** across 2–3 files, 1–2 weeks of work. The landmark_path patch alone (~150 lines) would unlock both `landmark_path` and `ordinal` together. `context_window` is the largest and most optional of the three (it only improves disambiguation for near-duplicate elements).
