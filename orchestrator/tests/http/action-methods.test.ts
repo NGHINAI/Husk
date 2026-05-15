@@ -5,7 +5,7 @@ import type { Session } from "../../src/session/session.js";
 
 function makeCtx(session: Partial<Session>) {
   const sm = new SessionManager(async () => session as Session);
-  return { ctx: { sessions: sm, version: "0.0.0" }, sm };
+  return { ctx: { sessions: sm, version: "0.0.0", vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any }, sm };
 }
 
 describe("HTTP action methods", () => {

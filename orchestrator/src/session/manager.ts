@@ -19,7 +19,7 @@ export class SessionNotFoundError extends Error {
  * production this is `Session.create.bind(Session, opts)`. In tests we
  * pass a function returning a fake.
  */
-export type SessionFactory = () => Promise<Session>;
+export type SessionFactory = (opts?: { profile?: string }) => Promise<Session>;
 
 /**
  * Owns the lifecycle of all live sessions. Each session has a unique id
@@ -30,8 +30,8 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   constructor(private readonly factory: SessionFactory) {}
 
-  async create(): Promise<string> {
-    const session = await this.factory();
+  async create(opts: { profile?: string } = {}): Promise<string> {
+    const session = await this.factory(opts);
     const id = randomUUID();
     this.sessions.set(id, session);
     return id;

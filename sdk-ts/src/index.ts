@@ -1,5 +1,6 @@
 import { JsonRpcClient } from "./transport.js";
 import { Session } from "./session.js";
+import type { Cookie } from "./types.js";
 
 export const SDK_VERSION = "0.0.0";
 
@@ -30,17 +31,44 @@ const DEFAULT_BASE_URL = "http://localhost:7777";
  * if (!r.ok) console.log("rejected:", r.reason, r.candidates);
  * ```
  */
+class VaultApi {
+  constructor(private readonly client: JsonRpcClient) {}
+
+  async listProfiles(): Promise<string[]> {
+    const r = await this.client.call<{ profiles: string[] }>("vault_list_profiles", {});
+    return r.profiles;
+  }
+
+  async listCookies(profile: string): Promise<Cookie[]> {
+    const r = await this.client.call<{ cookies: Cookie[] }>("vault_list_cookies", { profile });
+    return r.cookies;
+  }
+
+  async clear(profile: string): Promise<void> {
+    await this.client.call("vault_clear", { profile });
+  }
+
+  async removeCookie(profile: string, name: string, domain: string, path: string): Promise<void> {
+    await this.client.call("vault_remove_cookie", { profile, name, domain, path });
+  }
+}
+
+export { VaultApi };
+
 export class Husk {
   public readonly baseUrl: string;
+  public readonly vault: VaultApi;
   private readonly client: JsonRpcClient;
 
   constructor(options: HuskOptions = {}) {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.client = new JsonRpcClient({ baseUrl: this.baseUrl, fetch: options.fetch });
+    this.vault = new VaultApi(this.client);
   }
 
-  async createSession(): Promise<Session> {
-    const { session_id } = await this.client.call<{ session_id: string }>("create_session", {});
+  async createSession(options: { profile?: string } = {}): Promise<Session> {
+    const params = options.profile !== undefined ? { profile: options.profile } : {};
+    const { session_id } = await this.client.call<{ session_id: string }>("create_session", params);
     return new Session(this.client, session_id);
   }
 

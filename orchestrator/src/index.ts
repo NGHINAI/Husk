@@ -3,6 +3,7 @@ import { getVersion } from "./version.js";
 import { Session } from "./session/session.js";
 import { SessionManager } from "./session/manager.js";
 import { createHuskServer } from "./http/server.js";
+import { VaultStore } from "./vault/store.js";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -30,6 +31,9 @@ switch (cmd) {
   case "start":
     await runServer(parseStartArgs(args.slice(1)));
     break;
+  case "vault":
+    await runVault(args.slice(1));
+    break;
   case "help":
   case "--help":
   case "-h":
@@ -44,6 +48,8 @@ Usage:
                                           Start the HTTP/JSON-RPC server on the
                                           given port (default 7777) and host
                                           (default 127.0.0.1). Runs until killed.
+  husk vault list                         List saved cookie profiles
+  husk vault clear <profile>              Clear all cookies in a profile
 
 Coming in later milestones:
   husk run <example>      Run an example agent (M6)
@@ -108,6 +114,12 @@ async function runServer(args: StartArgs): Promise<void> {
   const cacheDir = process.env.HUSK_CACHE_DIR ?? pathJoin(homedir(), ".husk", "site-graph");
   const siteGraph = new SiteGraphCache({ cacheDir });
 
+  const vaultDir = process.env.HUSK_VAULT_DIR ?? pathJoin(homedir(), ".husk", "vault");
+  const vault = new VaultStore({
+    vaultDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+
   // Load policy YAML once at startup if --policy was passed.
   let defaultPolicy: PolicyDocument | null = null;
   if (args.policy) {
@@ -116,10 +128,12 @@ async function runServer(args: StartArgs): Promise<void> {
     defaultPolicy = parsePolicy(yaml);
   }
 
-  const sessions = new SessionManager(async () => {
+  const sessions = new SessionManager(async (opts) => {
     const session = await Session.create({
       log: (l) => process.stderr.write(l + "\n"),
       siteGraph,
+      vault,
+      profile: opts?.profile,
     });
     if (defaultPolicy) session.setPolicy(defaultPolicy);
     return session;
@@ -131,6 +145,7 @@ async function runServer(args: StartArgs): Promise<void> {
     sessions,
     version: getVersion(),
     logLevel: args.logLevel,
+    vault,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM
@@ -138,9 +153,45 @@ async function runServer(args: StartArgs): Promise<void> {
     server.log.info({ signal }, "husk: shutting down");
     await sessions.closeAll();
     siteGraph.close();
+    vault.close();
     await server.stop();
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+async function runVault(rest: string[]): Promise<void> {
+  const sub = rest[0];
+  const vaultDir = process.env.HUSK_VAULT_DIR ?? pathJoin(homedir(), ".husk", "vault");
+  const vault = new VaultStore({
+    vaultDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+  try {
+    if (sub === "list") {
+      const profiles = vault.listProfiles();
+      if (profiles.length === 0) {
+        console.log("No profiles.");
+      } else {
+        for (const p of profiles) {
+          const n = vault.list(p).length;
+          console.log(`${p}\t${n} cookie${n === 1 ? "" : "s"}`);
+        }
+      }
+    } else if (sub === "clear") {
+      const profile = rest[1];
+      if (!profile) {
+        console.error("Usage: husk vault clear <profile>");
+        process.exit(1);
+      }
+      vault.clear(profile);
+      console.log(`Cleared ${profile}.`);
+    } else {
+      console.error("Usage: husk vault list | husk vault clear <profile>");
+      process.exit(1);
+    }
+  } finally {
+    vault.close();
+  }
 }

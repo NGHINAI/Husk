@@ -61,3 +61,22 @@ describe("handleToolCall", () => {
     await expect(handleToolCall(client as any, "husk_bogus", {})).rejects.toThrow(/Unknown tool/);
   });
 });
+
+describe("vault tools", () => {
+  it("TOOL_SURFACE includes husk_vault_list_profiles + husk_vault_clear", () => {
+    const names = TOOL_SURFACE.map((t) => t.name);
+    expect(names).toContain("husk_vault_list_profiles");
+    expect(names).toContain("husk_vault_clear");
+  });
+
+  it("husk_create_session schema accepts optional profile", () => {
+    const tool = TOOL_SURFACE.find((t) => t.name === "husk_create_session")!;
+    expect(tool.inputSchema.properties.profile).toBeDefined();
+  });
+
+  it("handleToolCall routes husk_vault_list_profiles to vault_list_profiles", async () => {
+    const client = { call: vi.fn(async () => ({ profiles: ["default"] })) };
+    await handleToolCall(client as any, "husk_vault_list_profiles", {});
+    expect(client.call).toHaveBeenCalledWith("vault_list_profiles", {});
+  });
+});

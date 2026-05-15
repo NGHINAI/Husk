@@ -448,6 +448,26 @@ The rule engine is a pure matcher. No fuzzy semantics, no LLM. Rules are evaluat
 
 Second-pass LLM call: *"given the agent's stated goal X, is the proposed action Y consistent?"*. Adds ~500 ms latency and ~$0.001/call. Out of v0 to keep the v0 watchdog story strictly deterministic and demoable without LLM dependencies. Revisit when a paying customer specifically requests it.
 
+### 5.4 Cookie Vault (M8a — shipped 2026-05-15)
+
+Per-profile cookie persistence so sessions survive across `husk start` restarts. Foundation for M8b (login forms + TOTP) and M8c (SSO/OIDC + MFA).
+
+**Storage:** per-profile SQLite at `~/.husk/vault/{profile}.db` (overridable via `HUSK_VAULT_DIR`). File mode 0600. Cookies stored in CDP `Network.Cookie` format verbatim. Optional AES-256-GCM at-rest encryption via `HUSK_VAULT_KEY` env (base64 32-byte key, scrypt-derived with fixed salt `husk-vault-v1`).
+
+**Capture:** `Network.getAllCookies` polled on session close (best-effort). Lightpanda lacks `requestWillBeSentExtraInfo` events, so we can't intercept Set-Cookie in flight; close-time capture is sufficient for cookie-based SSO.
+
+**Restoration:** on `Session.create({ profile })`, the orchestrator calls `Network.enable` + `Network.setCookies` before any user-initiated navigation.
+
+**Profile concept:** free-form string, validated `^[A-Za-z0-9_.-]{1,64}$`. Default is no profile (cookies not persisted). Sessions without a profile get a clean jar every time.
+
+**Threat model:** file mode 0600 protects against accidental disclosure (shared folders, backup uploads). `HUSK_VAULT_KEY` adds AES-GCM for at-rest attackers without process env access. NOT designed for adversaries with local read of the orchestrator process — that's M10 cloud's job.
+
+**Known gaps (M8b/c territory):**
+- `localStorage` / `sessionStorage` not persisted — lightpanda's Shed is in-memory only.
+- IndexedDB absent in lightpanda upstream — Firebase Auth, AWS Amplify, Auth0 SPA SDK auth tokens will fail silently.
+- Cookie partition keys (`Partitioned` attribute / CHIPS) silently ignored.
+- Login form auto-fill, TOTP, OIDC redirect capture, SAML, MFA hooks — all M8b/c.
+
 ---
 
 ## 6. Developer Experience — How Agents Access Husk

@@ -109,6 +109,37 @@ def _parse_node(d: Mapping[str, Any]) -> SnapshotNode:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Cookie:
+    name: str
+    value: str
+    domain: str
+    path: str
+    expires: int
+    size: int
+    http_only: bool
+    secure: bool
+    session: bool
+    same_site: Optional[str] = None
+    url: Optional[str] = None
+
+
+def parse_cookie(d: Mapping[str, Any]) -> Cookie:
+    return Cookie(
+        name=d["name"],
+        value=d["value"],
+        domain=d["domain"],
+        path=d["path"],
+        expires=d["expires"],
+        size=d["size"],
+        http_only=d["httpOnly"],
+        secure=d["secure"],
+        session=d["session"],
+        same_site=d.get("sameSite"),
+        url=d.get("url"),
+    )
+
+
 def parse_action_result(d: Mapping[str, Any]) -> ActionResult:
     if d.get("ok") is True:
         return SuccessResult(
