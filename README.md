@@ -36,7 +36,7 @@ Husk is the opposite stack:
 
 | Pillar | v0 status |
 |---|---|
-| Browser runtime (forked lightpanda) | ✅ |
+| Browser runtime (consumes prebuilt lightpanda binary) | ✅ |
 | Snapshot compression (a11y-tree-based JSON-LD with full text preserved) | ✅ |
 | Watchdog (sanity + policy, deterministic, no LLM) | ✅ |
 | TypeScript SDK + Python SDK | ✅ |
@@ -46,22 +46,31 @@ Husk is the opposite stack:
 | DOM-drift router (cross-deploy resolver) | v0.1 |
 | Cloud-hosted Husk | v0.3 |
 | WebGL / WebRTC / WebAssembly / Gmail / Salesforce | inherited limitation |
+| IndexedDB (affects Firebase Auth, Auth0 SPA, AWS Amplify) | inherited limitation; flagged in v0.2 |
 
 ## Quickstart
 
 ```sh
-# Prerequisites: Node 20, pnpm 9, Zig 0.13, Python 3.11+
-git clone https://github.com/yourorg/husk
-cd husk
+# Prerequisites: Node 20, pnpm 9, Python 3.11+
+git clone https://github.com/NGHINAI/Husk
+cd Husk
+
+# Install lightpanda binary (M2: consume prebuilt; no Zig build needed for v0)
+mkdir -p ~/.husk/bin
+curl -fsSL -o ~/.husk/bin/lightpanda \
+  https://github.com/lightpanda-io/browser/releases/download/0.3.0/lightpanda-$(uname -m | sed 's/x86_64/x86_64/;s/arm64/aarch64/')-$(uname -s | tr A-Z a-z)
+chmod +x ~/.husk/bin/lightpanda
+export LIGHTPANDA_BIN=~/.husk/bin/lightpanda
+
+# Build husk
 pnpm install
 make all
 
-# Start the orchestrator
-./orchestrator/dist/index.js start
-# Or via the installed CLI (when packaged): husk start
+# Smoke test
+make test
 
-# Run an example
-node examples/01-wikipedia-research/index.js
+# Demo: drive lightpanda end-to-end
+node ./orchestrator/dist/index.js demo https://example.com | head -50
 ```
 
 Full quickstart: [`docs/quickstart.md`](./docs/quickstart.md)
