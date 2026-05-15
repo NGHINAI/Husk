@@ -468,6 +468,53 @@ Per-profile cookie persistence so sessions survive across `husk start` restarts.
 - Cookie partition keys (`Partitioned` attribute / CHIPS) silently ignored.
 - Login form auto-fill, TOTP, OIDC redirect capture, SAML, MFA hooks — all M8b/c.
 
+### 5.5 Login + TOTP (M8b — shipped 2026-05-15)
+
+Builds on M8a's cookie vault. Adds credential storage and automated login.
+
+**Credential storage:** per-profile SQLite at `~/.husk/credentials/{profile}.db` (overridable via `HUSK_CREDENTIALS_DIR`). File mode 0600. Encrypted with the same `HUSK_VAULT_KEY` as the cookie vault but with a different scrypt salt (`husk-credentials-v1`) — domain separation so a vault-key compromise doesn't trivially leak credentials. Schema: `(key, username, password, totp_secret)` with `password` and `totp_secret` AES-256-GCM encrypted when a key is set.
+
+**TOTP:** RFC 6238 with HMAC-SHA1, 30-second period, 6-digit codes. Pure Node `crypto`. Verified against RFC test vectors (T=59 → 287082, T=1111111109 → 081804, T=1234567890 → 005924).
+
+**Login form locator:** ARIA-first heuristics over the snapshot tree.
+- Username: `textbox`/`combobox`/`searchbox` whose name matches `/user(name)?|e[\s-]?mail|login|account|handle|sign[\s-]?in/i`. Falls back to the first non-password visible textbox.
+- Password: `textbox` whose name matches `/password/i`.
+- Submit: `button` matching `/sign in|log in|submit/i`, fallback `/verify|continue|next|enter|proceed/i`. Disabled buttons de-prioritised.
+- TOTP: `textbox` matching `/one[\s-]?time|2fa|two[\s-]?factor|authenticator|verification|tot[pj]|code/i`.
+
+**Login flow:** `Session.login({username, password, totp_secret?})` —
+1. Snapshot the current page.
+2. Locate fields. If absent (or unreachable through CDP — see lightpanda caveat below), try the JS fallback.
+3. Type username, password, optional TOTP. Watchdog rejections surface as `watchdog_rejected`.
+4. Click submit; if URL doesn't change and the password field is still present, press Enter on the password field as a belt-and-suspenders fallback.
+5. Re-snapshot. Success if URL changed OR password field is gone. Otherwise `login_did_not_advance`.
+
+**Lightpanda CDP gaps discovered during M8b T11 integration:**
+1. `<input type="password">` is assigned `role="none"` in lightpanda's AX tree, not `"textbox"` — so `locateLoginFields` cannot find password fields through the snapshot tree alone.
+2. `DOM.focus { backendNodeId }` returns `-31998 UnknownMethod`.
+3. Mouse click followed by `Input.dispatchKeyEvent {type: "char"}` does not update input values (focus succeeds, but char events don't write).
+4. The only working mechanism in lightpanda is `Runtime.evaluate` with `element.value = "..."` + `form.submit()`.
+
+**JS form fallback (watchdog caveat):** When `performLogin` returns `login_form_not_found`, `Session.login` falls back to `jsFormLogin` — a Runtime.evaluate-based path that fills fields by CSS selector and calls `form.submit()`. **The watchdog does NOT gate the JS fallback** because it bypasses the action primitives. This is a deliberate tradeoff for v0: without the fallback, login is impossible on lightpanda. v0.1+ should either (a) push an upstream patch to lightpanda's AX tree to surface password inputs, or (b) wrap the JS fallback in a watchdog "JS execution" policy gate.
+
+**HTTP methods:**
+- `credentials_set` / `credentials_remove` / `credentials_list` / `credentials_list_profiles`
+- `login(session_id, profile, key)` — looks up credential by `(profile, key)` and invokes `Session.login`.
+
+**SDKs (TS + Py):** `Husk.credentials.set/list/remove/listProfiles`; `Session.login({profile, key})`.
+
+**MCP tools:** `husk_login`, `husk_credentials_set`. Other credential ops intentionally CLI-only (admin operations).
+
+**CLI:** `husk login --profile <p> --key <k>` reads username/password/optional-totp-secret from stdin; `husk login --list --profile <p>` enumerates without passwords; `husk login --remove --profile <p> --key <k>`.
+
+**Known gaps (M8c territory):**
+- Two-page split flows (username on page 1, password on page 2) — not supported in v0. Most major auth providers do this (Google, Microsoft, Okta).
+- SSO/OIDC redirect chains, SAML POST-binding.
+- CAPTCHA — permanently out of scope.
+- "Remember me" checkboxes — not toggled in v0.
+- Account creation, password reset — login only.
+- JS fallback ungated by watchdog (see caveat above).
+
 ---
 
 ## 6. Developer Experience — How Agents Access Husk
