@@ -3,12 +3,24 @@ info:
   title: Husk JSON-RPC API
   version: 0.0.0
   description: |
-    JSON-RPC 2.0 over HTTP/2. Single source of truth for the agent ↔
-    orchestrator boundary. SDKs are generated against this spec.
+    JSON-RPC 2.0 over HTTP/1.1 + HTTP/2 (server: Node `http`). Single
+    endpoint at /v1/jsonrpc accepting POSTed JSON-RPC envelopes.
 
-    Milestone 1: stub with only a health-check method. Full method
-    surface defined in Milestone 3 (`create_session`, `goto`, `snapshot`,
-    `act`, `close_session`) and Milestone 5 (`set_policy`).
+    Six methods in v0:
+      - health           — server liveness + active session count
+      - create_session   — spawn a lightpanda subprocess + open CDP
+      - goto             — navigate the session to a URL
+      - snapshot         — return a spec-§5.2 JSON-LD snapshot
+      - snapshot_diff    — return diff vs prior snapshot, or null
+      - close_session    — tear down the session
+
+    Custom JSON-RPC error codes:
+      -32001  Session not found
+      -32002  Engine error (lightpanda subprocess failure)
+      -32003  Lightpanda binary not found
+      -32004  Invalid URL
+
+    Plus JSON-RPC 2.0 standard codes (-32600..-32700).
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -30,11 +42,13 @@ paths:
               $ref: "#/components/schemas/JsonRpcRequest"
       responses:
         "200":
-          description: JSON-RPC response
+          description: JSON-RPC response (success or error in envelope)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/JsonRpcResponse"
+        "405":
+          description: Method Not Allowed (only POST accepted on this endpoint)
 
 components:
   schemas:
@@ -47,10 +61,13 @@ components:
           const: "2.0"
         method:
           type: string
-          enum: [health]
-          description: |
-            Milestone 1 supports only `health`. M3 adds session, M5 adds
-            policy, M6 adds tool-manifest helpers.
+          enum:
+            - health
+            - create_session
+            - goto
+            - snapshot
+            - snapshot_diff
+            - close_session
         params:
           type: object
         id:
@@ -75,6 +92,53 @@ components:
       properties:
         code:
           type: integer
+          description: |
+            JSON-RPC error code. Husk custom codes: -32001 (session not
+            found), -32002 (engine error), -32003 (binary not found),
+            -32004 (invalid URL). Plus JSON-RPC 2.0 standard codes.
         message:
           type: string
         data: {}
+
+    HealthResult:
+      type: object
+      required: [ok, version, activeSessions]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        version:
+          type: string
+        activeSessions:
+          type: integer
+
+    CreateSessionResult:
+      type: object
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+
+    GotoParams:
+      type: object
+      required: [session_id, url]
+      properties:
+        session_id:
+          type: string
+        url:
+          type: string
+          format: uri
+
+    SnapshotParams:
+      type: object
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+
+    CloseSessionParams:
+      type: object
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
