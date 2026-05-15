@@ -737,15 +737,31 @@ The Husk name and logo are trademarks of the Husk project entity, registered sep
 
 If any gate fails, v0 does not ship; the timeline extends until it passes.
 
-### Post-v0 sequencing (sketch, refined at each milestone)
+### Post-v0 sequencing (committed — refined at each milestone)
 
-| Milestone | Theme | Approx. duration |
+> **Sequencing change 2026-05-15:** The original spec listed v0.1 as DOM-drift router and v0.2 as auth pillar. After M3 we promoted **auth to M8 (right after M7 launch)** because every interesting real-world workflow stops at the login page without it. DOM-drift router moves from v0.1 to M9. The numbering renames v0.1 → M9 and so on, but each milestone's *theme* is unchanged. Auth is now the *first* post-launch capability rather than the second.
+
+| Milestone | Theme | Approx. duration | Capability after this milestone |
+|---|---|---|---|
+| **M8** *(was v0.2)* | **Auth pillar** — cookie vault, TOTP, SSO/SAML/OIDC redirect chaining, per-site session graphs, human-in-the-loop hooks for SMS/push MFA. **First post-M7 milestone.** | 6–8 weeks | Agents can log into ~85% of websites. Tier 1 + login-gated flows. |
+| **M9** *(was v0.1)* | **DOM-drift router** — cross-deploy semantic-ID resolution, self-healing selectors, replay-based regression tests for site graphs | 6–8 weeks | Sites can redesign without breaking your agents. |
+| **M10** *(was v0.3)* | **Husk Cloud (open core)** — managed runtime on Fly.io/Modal, API keys, billing, multi-tenancy, observability dashboard | 8–10 weeks | Hosted SaaS — revenue model active. |
+| **M11** *(was v1.0)* | **Pre-indexing pipeline + vertical playbooks** — offline crawler builds site graphs for top sites, vertical recipes for insurance / mortgage / prior auth / shopping | 12 weeks | Healthcare/insurance/mortgage parity with StableBrowse-class products. |
+| **M12** *(was v2.0, aspirational, needs team)* | **Hybrid engine** — stripped Chromium fork for high-compat sites; runtime routes by site complexity (lightpanda for simple, stripped Chromium for complex) | 6 months | Gmail / Salesforce / Workday / Microsoft 365 / modern-SPA compat. Tier 3 unlocked. |
+
+**Capability tiers reachable at each milestone:**
+
+| Tier | Examples | Reached at |
 |---|---|---|
-| **v0.1** | **DOM-drift router pillar** — cross-deploy semantic-ID resolution, self-healing selectors, replay-based regression tests for site graphs | 6–8 weeks |
-| **v0.2** | **Auth pillar** — cookie vault, TOTP, SSO/SAML/OIDC redirect chaining, per-site session graphs, human-in-the-loop hooks for SMS/push MFA | 6–8 weeks |
-| **v0.3** | **Husk Cloud (open core)** — managed runtime on Fly.io/Modal, API keys, billing, multi-tenancy, observability dashboard | 8–10 weeks |
-| **v1.0** | **Pre-indexing pipeline** — offline crawler builds site graphs for top sites, vertical recipes (insurance / mortgage / prior auth) | 12 weeks |
-| **v2.0** *(aspirational, needs team)* | **Hybrid engine** — stripped Chromium fork for high-compat sites; runtime routes by site complexity (lightpanda for simple, stripped Chromium for complex) | 6 months |
+| **1** — Most of the web (read, click, type, navigate, search) | Wikipedia, blogs, docs, simple forms, search engines, basic SaaS | M7 launch |
+| **1.5** — Tier 1 + login-gated | ~85% of useful websites — banking, payer portals (Aetna etc.), gov sites, healthcare scheduling, mortgage applications, normal e-commerce checkouts | **M8 (auth)** |
+| **2** — Polished vertical playbooks | Healthcare prior-auth, insurance broker flows, mortgage applications, structured purchasing flows with high reliability | **M11 (recipes)** |
+| **3** — Modern complex SPAs | Gmail, Google Docs, Salesforce, Workday, LinkedIn, Slack web, Discord web, modern Shopify | **M12 (hybrid engine)** |
+| **4** — Permanently out of scope | CAPTCHA-protected sites, Cloudflare bot fight mode, WebAuthn-only MFA (hardware keys), DRM video, WebRTC calls, heavy WebAssembly | Never (industry-wide unsolved; not a Husk-specific gap) |
+
+**Time to "agents can do real workflows on real websites" (Tier 1.5):** M7 launch + M8 auth = ~12-14 weeks from M3.
+**Time to "match StableBrowse-class vertical demos" (Tier 2):** + M11 = ~9 months from M3.
+**Time to "do everything a human does on the typical web" (Tier 1+2+3):** ~12-15 months from M3.
 
 ### Permanently out of scope
 
