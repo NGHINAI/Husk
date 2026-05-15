@@ -3,10 +3,13 @@ import type {
   ForbiddenRule,
   PolicyDocument,
   PrereqClause,
+  RejectionReason,
   RequiredBeforeRule,
   Severity,
   Verb,
+  Warning,
 } from "./types.js";
+import type { Snapshot, SnapshotNode } from "../snapshot/types.js";
 
 export class PolicyParseError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
@@ -100,4 +103,158 @@ function parseStringList(raw: unknown, field: string): string[] {
     if (typeof x !== "string") throw new PolicyParseError(`${field}[${i}] must be a string`);
     return x;
   });
+}
+
+// ─── Policy Matcher (Task 10) ─────────────────────────────────────────────────
+
+export interface PolicyContext {
+  verb: Verb;
+  /** The node being acted on. `null` for press_key / window scroll. */
+  node: SnapshotNode | null;
+  snapshot: Snapshot;
+}
+
+export type PolicyOutcome =
+  | { outcome: "allowed" }
+  | { outcome: "warned"; warnings: Warning[] }
+  | { outcome: "rejected"; reason: RejectionReason; message: string };
+
+/**
+ * Run policy rules in declaration order. Returns:
+ *   - "rejected"  if any `severity: hard` rule matches, or if a domain rule denies,
+ *                 or a required_before prereq is unsatisfied. First match wins.
+ *   - "warned"    if no hard rules match but at least one `severity: warn` rule matches.
+ *   - "allowed"   otherwise.
+ *
+ * Hard wins: a hard `forbidden` rule beats a matching `allow_domains` entry.
+ */
+export function evaluatePolicy(policy: PolicyDocument, ctx: PolicyContext): PolicyOutcome {
+  const warnings: Warning[] = [];
+
+  // 1. Forbidden — first hard match wins; warn matches are accumulated.
+  for (const rule of policy.forbidden ?? []) {
+    if (rule.on && rule.on !== ctx.verb) continue;
+    if (!ruleMatchesNode(rule, ctx.node)) continue;
+    if (rule.severity === "hard") {
+      return {
+        outcome: "rejected",
+        reason: "policy_forbidden",
+        message: rule.message ?? `Action blocked by policy rule (${rule.role ?? rule.selector}).`,
+      };
+    }
+    warnings.push({ reason: "policy_warn", message: rule.message ?? "Policy warning." });
+  }
+
+  // 2. Required-before — check prereqs in the snapshot.
+  for (const rb of policy.required_before ?? []) {
+    if (rb.action !== ctx.verb && !(rb.action === "submit_form" && ctx.verb === "click" && isSubmitButton(ctx.node))) {
+      continue;
+    }
+    for (const prereq of rb.prereq) {
+      if (!prereqSatisfied(prereq, ctx.snapshot)) {
+        return {
+          outcome: "rejected",
+          reason: "policy_required_before",
+          message: `Prerequisite not met: ${prereq.role} matching ${prereq.name_matches} must be ${prereq.state}.`,
+        };
+      }
+    }
+  }
+
+  // 3. Domains — deny unless allow matches.
+  const host = hostnameOf(ctx.snapshot.url);
+  if (host) {
+    const denied = (policy.deny_domains ?? []).some((g) => globMatches(g, host));
+    const allowed = (policy.allow_domains ?? []).some((g) => globMatches(g, host));
+    if (denied && !allowed) {
+      return {
+        outcome: "rejected",
+        reason: "policy_domain_denied",
+        message: `Domain ${host} is not in allow_domains.`,
+      };
+    }
+  }
+
+  return warnings.length ? { outcome: "warned", warnings } : { outcome: "allowed" };
+}
+
+/**
+ * Compile a regex pattern that may use the `(?i)` prefix (Python/YAML convention)
+ * or inline JS flags. Strips `(?i)` and applies the `i` flag instead.
+ */
+function compilePattern(source: string): RegExp | null {
+  try {
+    if (source.startsWith("(?i)")) {
+      return new RegExp(source.slice(4), "i");
+    }
+    return new RegExp(source);
+  } catch {
+    return null;
+  }
+}
+
+function ruleMatchesNode(rule: ForbiddenRule, node: SnapshotNode | null): boolean {
+  if (!node) return false;
+  if (rule.selector) {
+    // v0 cannot evaluate CSS against snapshot nodes — SiteGraphRow.current_css is null in v0.
+    // Always non-matching for now; v0.1 fills this in.
+    return false;
+  }
+  if (rule.role && rule.role !== node.r) return false;
+  if (rule.name_matches) {
+    const re = compilePattern(rule.name_matches);
+    if (!re || !re.test(node.n)) return false;
+  }
+  return true;
+}
+
+function prereqSatisfied(prereq: PrereqClause, snapshot: Snapshot): boolean {
+  const re = compilePattern(prereq.name_matches);
+  if (!re) return false;
+  const hit = findNode(snapshot.root, (n) => n.r === prereq.role && re.test(n.n));
+  if (!hit) return false;
+  switch (prereq.state) {
+    case "checked": return hit.s.includes("c");
+    case "enabled": return hit.s.includes("e");
+    case "visible": return hit.s.includes("v");
+    case "focused": return hit.s.includes("f");
+    case "disabled": return hit.s.includes("d");
+  }
+}
+
+function findNode(node: SnapshotNode, pred: (n: SnapshotNode) => boolean): SnapshotNode | null {
+  if (pred(node)) return node;
+  for (const c of node.c ?? []) {
+    const hit = findNode(c, pred);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function isSubmitButton(node: SnapshotNode | null): boolean {
+  return !!node && node.r === "button" && /\bsubmit\b/i.test(node.n);
+}
+
+function hostnameOf(url: string): string | null {
+  try { return new URL(url).hostname; } catch { return null; }
+}
+
+/**
+ * Tiny glob matcher: '*' matches one DNS label or any sequence depending on
+ * position. Specifically:
+ *   - "*"            → match anything
+ *   - "*.foo.com"    → match only subdomains of foo.com (NOT foo.com itself)
+ *   - "foo.com"      → exact host match
+ *   - "*foo*.com"    → contains-foo and ends-with .com
+ * Compiles to anchored RegExp.
+ */
+export function globMatches(pattern: string, host: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.startsWith("*.")) {
+    const rest = pattern.slice(2).replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^[^.]+\\.${rest}$|^([^.]+\\.)+${rest}$`);
+    return re.test(host);
+  }
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(host);
 }
