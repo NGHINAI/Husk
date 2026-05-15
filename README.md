@@ -133,6 +133,47 @@ Knobs: `BENCH_N` (URL count, default 50), `BENCH_POOL_MIN` (warm processes, defa
 
 Architecture notes — `docs/superpowers/specs/2026-05-13-husk-design.md` §5.6.
 
+## Batch operations
+
+When an agent needs to process many URLs, the most efficient pattern is a
+single `husk_batch_visit` call rather than 50 `husk_goto`+`husk_snapshot` pairs:
+
+```json
+{
+  "tool": "husk_batch_visit",
+  "arguments": {
+    "urls": [
+      "https://example.com/",
+      "https://news.ycombinator.com/",
+      "https://en.wikipedia.org/wiki/Kubernetes"
+    ],
+    "extract": { "css": "meta[name='description']" }
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "results": [
+    { "url": "https://example.com/",                          "ok": true, "text": "..." },
+    { "url": "https://news.ycombinator.com/",                 "ok": true, "text": "..." },
+    { "url": "https://en.wikipedia.org/wiki/Kubernetes",      "ok": true, "text": "..." }
+  ]
+}
+```
+
+All URLs are fetched in parallel through the engine pool. Per-URL errors
+are isolated (one bad URL doesn't break the rest). With `extract`, each
+result is ~200 bytes; without it, each is a terse snapshot.
+
+**Note:** `extract` uses `Runtime.evaluate` on the current DOM. Lightpanda renders
+static HTML but does not execute client-side JS hydration that some modern apps
+rely on (e.g. GitHub's repo description div is React-rendered and won't be visible
+via `extract` against lightpanda). For those targets, use server-rendered selectors
+like `meta[name='description']` or wait for the Chrome adapter (v0.1+).
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing

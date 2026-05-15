@@ -533,6 +533,24 @@ The agent never names a concurrency knob. The engine handles it.
 
 **Performance contract (measured 2026-05-15):** 50-URL concurrent workflow — 3.9 seconds wall clock; per-URL avg 2.67s including 1.5s `goto` settle; throughput 12.8 URLs/sec. Pool warmup ~120ms. See `orchestrator/bench/parallel-bench.ts`.
 
+### 5.7 Batch Primitive + Targeted Extract (M11 — shipped 2026-05-15)
+
+M9 made individual operations fast via the engine pool. **In practice agents like Claude reason sequentially between tool calls, never returning 50 tool_use blocks in one response.** The pool's parallelism is wasted for batch workloads when the agent serializes calls itself.
+
+M11 fixes this with two surfaces:
+
+**`husk_extract(session_id, css)`** — Run `document.querySelector(css).textContent` via CDP `Runtime.evaluate`. Returns a string (trimmed) or null. ~100ms latency, ~200 bytes payload. Use after `husk_goto` when the agent knows the specific element it wants — much cheaper than `husk_snapshot` for targeted reads.
+
+**`husk_batch_visit(urls, extract?)`** — Single tool call from the agent's POV. Internally fans out across the engine pool: one session per URL, all navigations + extractions happen in parallel via `Promise.all`. Returns an array preserving input URL order; per-URL errors are isolated (one bad URL doesn't break the rest). When `extract` is supplied, returns just the matched text per URL (~200 bytes each). Without `extract`, returns terse snapshots (see below).
+
+**Terse snapshot mode.** A new `mode: 'terse'` option on `husk_snapshot` drops `navigation` / `banner` / `contentinfo` / `complementary` roles AND their subtrees from the output. Default in `batch_visit` when no `extract` is supplied. Default in `husk_snapshot` remains `'full'` for backward compatibility.
+
+**Decision K (architectural exception).** Decision J (M9) said "no concurrency knobs on primitives." It still holds for `husk_goto/snapshot/click/etc.` — those stay as single-action verbs. `husk_batch_visit` is a NEW primitive with a DIFFERENT shape (a collection verb), not a concurrency knob added to an existing primitive.
+
+**Caveat: client-side-rendered selectors.** The `extract` path uses `Runtime.evaluate` against the current DOM. Lightpanda renders most HTML but does NOT execute the full JS pipeline modern apps rely on for hydration. Selectors that match elements injected by client-side React/Vue/etc. (e.g. GitHub's `.f4.my-3` description div) won't be found via batch_visit + extract against lightpanda. For those targets, either use a server-rendered selector (e.g. `meta[name='description']`) or wait for the Chrome adapter (v0.1+).
+
+**Performance contract (measured 2026-05-15):** 50-URL `batch_visit` with extract — ~2.5s wall clock, ~200 bytes per result row (when selectors match server-rendered HTML). 50-URL `batch_visit` without extract (terse snapshots) — ~4s wall clock, ~170KB per result (real-world repo pages). 50-URL `pool` baseline (full snapshot per URL) — ~2.7s wall clock, ~43KB per result.
+
 ---
 
 ## 6. Developer Experience — How Agents Access Husk
