@@ -3,6 +3,7 @@ import type { Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { InvalidUrlError } from "./errors.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
+import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -69,11 +70,11 @@ export const METHODS = {
   },
 
   async snapshot(
-    params: { session_id: string; max_age_ms?: number },
+    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" },
     ctx: MethodContext
   ): Promise<Snapshot> {
     const session = ctx.sessions.get(params.session_id);
-    return await session.snapshot({ maxAgeMs: params.max_age_ms });
+    return await session.snapshot({ maxAgeMs: params.max_age_ms, mode: params.mode });
   },
 
   async snapshot_diff(
@@ -186,6 +187,15 @@ export const METHODS = {
     return { profiles: ctx.credentials.listProfiles() };
   },
 
+  async extract(
+    params: { session_id: string; css: string },
+    ctx: MethodContext
+  ): Promise<{ text: string | null }> {
+    const session = ctx.sessions.get(params.session_id);
+    const text = await session.extract({ css: params.css });
+    return { text };
+  },
+
   async login(
     params: {
       session_id: string;
@@ -229,6 +239,14 @@ export const METHODS = {
       reason: "invalid_login_params",
       message: "login requires either {profile, key} or {username, password}",
     };
+  },
+
+  async batch_visit(
+    params: BatchVisitParams,
+    ctx: MethodContext
+  ): Promise<{ results: BatchVisitItem[] }> {
+    const results = await batchVisit(ctx, params);
+    return { results };
   },
 } as const;
 

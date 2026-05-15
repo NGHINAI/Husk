@@ -23,3 +23,22 @@ export const PASSTHROUGH_ROLES: ReadonlySet<string> = new Set([
 export function isPassthroughRole(role: string | undefined): boolean {
   return role !== undefined && PASSTHROUGH_ROLES.has(role);
 }
+
+/**
+ * Roles whose nodes (AND their entire subtrees) are DROPPED in `mode: 'terse'`.
+ * These are page chrome — nav bars, banners, footers, sidebars — that have no
+ * actionable content for typical agent tasks.
+ *
+ * Different from PASSTHROUGH_ROLES: passthrough keeps the descendants in the
+ * output (parented to the passthrough's parent). Skip drops the whole subtree.
+ */
+export const SKIP_ROLES_TERSE: ReadonlySet<string> = new Set([
+  "navigation",
+  "banner",
+  "contentinfo",
+  "complementary",
+]);
+
+export function isSkipRoleTerse(role: string | undefined): boolean {
+  return role !== undefined && SKIP_ROLES_TERSE.has(role);
+}

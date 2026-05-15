@@ -7,6 +7,7 @@ import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
+import { runExtract, type ExtractQuery } from "./extract.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
 import { VaultStore } from "../vault/store.js";
 import { captureCookies } from "../vault/capture.js";
@@ -51,6 +52,7 @@ export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff |
 
 export class Session {
   private lastSnapshotAt = 0;
+  private lastSnapshotMode: "full" | "terse" = "full";
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -131,19 +133,24 @@ export class Session {
     }
   }
 
-  async snapshot(opts: { maxAgeMs?: number; force?: boolean } = {}): Promise<Snapshot> {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" } = {}): Promise<Snapshot> {
     const maxAge = opts.maxAgeMs ?? 500;
-    if (!opts.force && this.lastSnapshot && Date.now() - this.lastSnapshotAt < maxAge) {
-      return this.lastSnapshot;
-    }
+    const mode = opts.mode ?? "full";
+    const fresh =
+      !opts.force &&
+      this.lastSnapshot &&
+      Date.now() - this.lastSnapshotAt < maxAge &&
+      this.lastSnapshotMode === mode;
+    if (fresh) return this.lastSnapshot!;
     const tree = (await this.cdp.send(
       "Accessibility.getFullAXTree", {}, this.sessionId
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
-    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl);
+    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode });
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();
+    this.lastSnapshotMode = mode;
     this.siteGraph?.observe(snap);
     return snap;
   }
@@ -361,6 +368,10 @@ export class Session {
     }
   }
 
+  async extract(query: ExtractQuery): Promise<string | null> {
+    return await runExtract(this.cdp, this.sessionId, query);
+  }
+
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
@@ -481,3 +492,4 @@ async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
 }
 
 export type { LoginInput, LoginResult } from "../auth/login-flow.js";
+export type { ExtractQuery } from "./extract.js";

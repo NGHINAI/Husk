@@ -1,5 +1,5 @@
 import type { AXNode, AXNodeProperty, Snapshot, SnapshotNode, SnapshotStateFlag } from "./types.js";
-import { isPassthroughRole } from "./passthrough-roles.js";
+import { isPassthroughRole, isSkipRoleTerse } from "./passthrough-roles.js";
 import { stableId } from "./stable-id.js";
 import { SelectorResolver } from "./resolver.js";
 
@@ -22,7 +22,16 @@ import { SelectorResolver } from "./resolver.js";
  *   - `f` (focused) — when `focused` property is `true`
  *   - `v` (visible) — always set for now; visibility comes from CDP DOM in v0.1
  */
-export function transformAxTree(nodes: AXNode[], rootId: string, url: string): Snapshot {
+export interface TransformAxOptions {
+  mode?: "full" | "terse";
+}
+
+export function transformAxTree(
+  nodes: AXNode[],
+  rootId: string,
+  url: string,
+  opts: TransformAxOptions = {}
+): Snapshot {
   const byId = new Map<string, AXNode>();
   for (const n of nodes) byId.set(n.nodeId, n);
   const root = byId.get(rootId);
@@ -32,6 +41,12 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
   const resolver = new SelectorResolver();
   const visit = (node: AXNode, parentXpath: string, indexInParent: number): SnapshotNode | SnapshotNode[] => {
     const role = node.role?.value ?? "generic";
+
+    // Terse mode: drop nav/banner/footer/sidebar entirely (including subtree).
+    if (opts.mode === "terse" && isSkipRoleTerse(role)) {
+      return [];
+    }
+
     // Walk through (don't emit) both: passthrough-role nodes AND `ignored: true`
     // nodes. Both mean "this node has no semantic value of its own — surface its
     // descendants." CDP marks layout wrappers (e.g., implicit body/div containers)

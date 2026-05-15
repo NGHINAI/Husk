@@ -163,3 +163,40 @@ describe("parallelism + diff descriptions (M9)", () => {
     expect(t.inputSchema.properties.max_age_ms).toBeDefined();
   });
 });
+
+describe("batch_visit + extract tools (M11)", () => {
+  it("TOOL_SURFACE includes husk_extract + husk_batch_visit", () => {
+    const names = TOOL_SURFACE.map((t) => t.name);
+    expect(names).toContain("husk_extract");
+    expect(names).toContain("husk_batch_visit");
+  });
+
+  it("husk_extract requires session_id + css", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_extract")!;
+    expect(t.inputSchema.required).toEqual(expect.arrayContaining(["session_id", "css"]));
+  });
+
+  it("husk_batch_visit requires urls", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_batch_visit")!;
+    expect(t.inputSchema.required).toEqual(["urls"]);
+    expect(t.inputSchema.properties.urls).toBeDefined();
+    expect(t.inputSchema.properties.extract).toBeDefined();
+  });
+
+  it("husk_batch_visit description recommends usage for any list of URLs", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_batch_visit")!;
+    expect(t.description.toLowerCase()).toMatch(/parallel|multiple url|batch|list of url/);
+  });
+
+  it("handleToolCall routes husk_batch_visit to batch_visit RPC", async () => {
+    const client = { call: vi.fn(async () => ({ results: [] })) };
+    await handleToolCall(client as any, "husk_batch_visit", {
+      urls: ["https://a/", "https://b/"],
+      extract: { css: ".x" },
+    });
+    expect(client.call).toHaveBeenCalledWith("batch_visit", {
+      urls: ["https://a/", "https://b/"],
+      extract: { css: ".x" },
+    });
+  });
+});
