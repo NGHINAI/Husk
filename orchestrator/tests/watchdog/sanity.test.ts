@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runPreActionSanity } from "../../src/watchdog/sanity.js";
+import { runPreActionSanity, runPostActionAssertions } from "../../src/watchdog/sanity.js";
 import type { Snapshot } from "../../src/snapshot/types.js";
 
 function makeSnap(nodes: Array<{ i: string; r: string; n: string; s?: ("v"|"e"|"c"|"f"|"d")[] }>): Snapshot {
@@ -76,5 +76,79 @@ describe("runPreActionSanity", () => {
     ]);
     const res = runPreActionSanity(snap, "type", "textbox:t");
     expect(res.ok).toBe(true);
+  });
+});
+
+describe("runPostActionAssertions", () => {
+  const before: Snapshot = {
+    v: 1, url: "https://x.test/a", count: 2,
+    root: {
+      i: "RootWebArea:r", r: "RootWebArea", n: "Page", s: ["v"],
+      c: [{ i: "button:b", r: "button", n: "Go", s: ["v", "e"] }],
+    },
+  };
+
+  it("returns no warnings when DOM changed, no alert appeared, URL unchanged", () => {
+    const after: Snapshot = {
+      ...before,
+      root: {
+        ...before.root,
+        c: [
+          { i: "button:b", r: "button", n: "Go", s: ["v", "e"] },
+          { i: "paragraph:p", r: "paragraph", n: "Hello!", s: ["v"] },
+        ],
+      },
+    };
+    const warnings = runPostActionAssertions({
+      verb: "click",
+      before, after,
+      urlBefore: "https://x.test/a",
+      urlAfter: "https://x.test/a",
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("emits no_mutation_observed when before and after are identical", () => {
+    const warnings = runPostActionAssertions({
+      verb: "click", before, after: before,
+      urlBefore: "https://x.test/a", urlAfter: "https://x.test/a",
+    });
+    expect(warnings.map((w) => w.reason)).toContain("no_mutation_observed");
+  });
+
+  it("emits error_alert_appeared when a new alert role with negative content is present", () => {
+    const after: Snapshot = {
+      ...before,
+      root: {
+        ...before.root,
+        c: [
+          { i: "button:b", r: "button", n: "Go", s: ["v", "e"] },
+          { i: "alert:a", r: "alert", n: "Submission failed: invalid email", s: ["v"] },
+        ],
+      },
+    };
+    const warnings = runPostActionAssertions({
+      verb: "click", before, after,
+      urlBefore: "https://x.test/a", urlAfter: "https://x.test/a",
+    });
+    expect(warnings.some((w) => w.reason === "error_alert_appeared")).toBe(true);
+  });
+
+  it("emits unexpected_navigation when click changed the URL", () => {
+    const after = { ...before, url: "https://x.test/b" };
+    const warnings = runPostActionAssertions({
+      verb: "click", before, after,
+      urlBefore: "https://x.test/a", urlAfter: "https://x.test/b",
+    });
+    expect(warnings.some((w) => w.reason === "unexpected_navigation")).toBe(true);
+  });
+
+  it("does NOT emit unexpected_navigation for press_key (Tab/Enter can legitimately navigate)", () => {
+    const after = { ...before, url: "https://x.test/b" };
+    const warnings = runPostActionAssertions({
+      verb: "press_key", before, after,
+      urlBefore: "https://x.test/a", urlAfter: "https://x.test/b",
+    });
+    expect(warnings.some((w) => w.reason === "unexpected_navigation")).toBe(false);
   });
 });

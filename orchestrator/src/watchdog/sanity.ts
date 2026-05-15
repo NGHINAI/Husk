@@ -1,6 +1,7 @@
 import type { Snapshot, SnapshotNode } from "../snapshot/types.js";
-import type { RejectionReason, Verb } from "./types.js";
+import type { RejectionReason, Verb, Warning } from "./types.js";
 import { isRoleVerbCompatible } from "./role-verb-table.js";
+import { diffSnapshots } from "../snapshot/poller.js";
 
 export type SanityResult =
   | { ok: true; node: SnapshotNode | null }
@@ -53,6 +54,69 @@ export function findById(node: SnapshotNode, id: string): SnapshotNode | null {
   if (node.i === id) return node;
   for (const c of node.c ?? []) {
     const hit = findById(c, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export interface PostActionInput {
+  verb: Verb;
+  before: Snapshot;
+  after: Snapshot;
+  urlBefore: string;
+  urlAfter: string;
+}
+
+const NEGATIVE_ALERT_RE = /\b(error|failed|fail|invalid|denied|forbidden|not allowed|reject)/i;
+
+/**
+ * Post-action assertions (spec §5.3 Layer 1). All warnings; never block the
+ * caller. Spec semantics:
+ *   - no_mutation_observed: returned when before and after snapshots are
+ *     structurally identical. Warn-only because some click handlers genuinely
+ *     no-op (toggle that was already in state).
+ *   - error_alert_appeared: scans the `after` snapshot for new role=alert or
+ *     role=status nodes whose name matches NEGATIVE_ALERT_RE.
+ *   - unexpected_navigation: URL changed for non-nav verbs. Suppressed for
+ *     `press_key` (Enter/Tab legitimately navigate) and pure `scroll`.
+ */
+export function runPostActionAssertions(input: PostActionInput): Warning[] {
+  const warnings: Warning[] = [];
+
+  const diff = diffSnapshots(input.before, input.after);
+  const noChange =
+    diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
+  if (noChange && input.urlBefore === input.urlAfter) {
+    warnings.push({
+      reason: "no_mutation_observed",
+      message: "No DOM mutation detected within the action window.",
+    });
+  }
+
+  const newAlert = findAlertWithNegativeContent(input.after.root, input.before);
+  if (newAlert) {
+    warnings.push({
+      reason: "error_alert_appeared",
+      message: `New alert appeared: ${JSON.stringify(newAlert.n)}`,
+    });
+  }
+
+  if (input.verb !== "press_key" && input.verb !== "scroll" && input.urlBefore !== input.urlAfter) {
+    warnings.push({
+      reason: "unexpected_navigation",
+      message: `URL changed from ${input.urlBefore} to ${input.urlAfter} during a ${input.verb} action.`,
+    });
+  }
+
+  return warnings;
+}
+
+function findAlertWithNegativeContent(node: SnapshotNode, before: Snapshot): SnapshotNode | null {
+  if ((node.r === "alert" || node.r === "status") && NEGATIVE_ALERT_RE.test(node.n)) {
+    if (!findById(before.root, node.i)) return node;
+  }
+  for (const c of node.c ?? []) {
+    const hit = findAlertWithNegativeContent(c, before);
     if (hit) return hit;
   }
   return null;
