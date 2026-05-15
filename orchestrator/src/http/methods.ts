@@ -116,6 +116,21 @@ export const METHODS = {
     const session = ctx.sessions.get(params.session_id);
     return await session.press_key(params.key);
   },
+
+  async set_policy(
+    params: { session_id: string; policy_yaml: string | null },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    if (params.policy_yaml === null) {
+      session.setPolicy(null);
+      return { ok: true };
+    }
+    const { parsePolicy } = await import("../watchdog/policy.js");
+    const parsed = parsePolicy(params.policy_yaml);
+    session.setPolicy(parsed);
+    return { ok: true };
+  },
 } as const;
 
 /** Type-level enumeration of all method names. */

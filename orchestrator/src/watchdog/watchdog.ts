@@ -4,6 +4,7 @@ import { runPreActionSanity, runPostActionAssertions, type SanityResult } from "
 import { buildRejection } from "./envelope.js";
 import { findCandidates } from "./candidates.js";
 import { normalizeDomain } from "../cache/domain.js";
+import { evaluatePolicy } from "./policy.js";
 import type {
   PolicyDocument,
   RejectionEnvelope,
@@ -47,6 +48,30 @@ export class Watchdog {
     if (!sanity.ok) {
       return { ok: false, envelope: this.buildEnvelope(snapshot, verb, stableId, sanity) };
     }
+
+    if (this.policy) {
+      const decision = evaluatePolicy(this.policy, {
+        verb,
+        node: sanity.node,
+        snapshot,
+      });
+      if (decision.outcome === "rejected") {
+        return {
+          ok: false,
+          envelope: buildRejection({
+            reason: decision.reason,
+            verb,
+            stable_id_attempted: stableId,
+            snapshot,
+            candidates: [],
+            message: decision.message,
+          }),
+        };
+      }
+      // `warned` is non-blocking. v0 swallows Layer 2 warnings on the pre-action
+      // path; surfacing them on the success envelope is M6 territory.
+    }
+
     let backendNodeId: number | null = null;
     if (stableId && snapshot._resolver) {
       backendNodeId = snapshot._resolver.get(stableId) ?? null;
