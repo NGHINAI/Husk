@@ -5,6 +5,9 @@ import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
+import { Watchdog } from "../watchdog/watchdog.js";
+import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
+import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -29,6 +32,8 @@ export interface SessionOptions {
  *      or `null` if there is no prior. The current snapshot becomes the new baseline.
  *   5. `session.close()` — disconnects and kills the subprocess.
  */
+export type ActionResult = { ok: true; warnings: Warning[] } | RejectionEnvelope;
+
 export class Session {
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -36,7 +41,8 @@ export class Session {
     private readonly sessionId: string,
     private currentUrl: string,
     private lastSnapshot: Snapshot | null = null,
-    private readonly siteGraph: SiteGraphCache | null = null
+    private readonly siteGraph: SiteGraphCache | null = null,
+    private readonly watchdog: Watchdog
   ) {}
 
   static async create(opts: SessionOptions = {}): Promise<Session> {
@@ -63,7 +69,8 @@ export class Session {
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Accessibility.enable", {}, sessionId);
 
-    return new Session(engine, cdp, sessionId, "about:blank", null, opts.siteGraph ?? null);
+    const wd = new Watchdog({ cache: opts.siteGraph ?? null });
+    return new Session(engine, cdp, sessionId, "about:blank", null, opts.siteGraph ?? null, wd);
   }
 
   async goto(url: string): Promise<void> {
@@ -95,10 +102,102 @@ export class Session {
     return diffSnapshots(prior, current);
   }
 
+  setPolicy(policy: PolicyDocument | null): void {
+    this.watchdog.setPolicy(policy);
+  }
+
+  async click(stable_id: string): Promise<ActionResult> {
+    const before = await this.snapshot();
+    const pre = this.watchdog.evaluatePre(before, "click", stable_id);
+    if (!pre.ok) return pre.envelope;
+    if (pre.backendNodeId == null) {
+      return {
+        ok: false,
+        reason: "element_not_found",
+        verb: "click",
+        stable_id_attempted: stable_id,
+        candidates: [],
+        snapshot_at_attempt: before,
+      };
+    }
+    const urlBefore = this.currentUrl;
+    await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
+    await waitForMutationWindow();
+    const after = await this.snapshot();
+    return {
+      ok: true,
+      warnings: this.watchdog.evaluatePost({
+        verb: "click", before, after, urlBefore, urlAfter: this.currentUrl,
+      }),
+    };
+  }
+
+  async type(stable_id: string, text: string): Promise<ActionResult> {
+    const before = await this.snapshot();
+    const pre = this.watchdog.evaluatePre(before, "type", stable_id);
+    if (!pre.ok) return pre.envelope;
+    if (pre.backendNodeId == null) {
+      return {
+        ok: false,
+        reason: "element_not_found",
+        verb: "type",
+        stable_id_attempted: stable_id,
+        candidates: [],
+        snapshot_at_attempt: before,
+      };
+    }
+    const urlBefore = this.currentUrl;
+    await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
+    await waitForMutationWindow();
+    const after = await this.snapshot();
+    return {
+      ok: true,
+      warnings: this.watchdog.evaluatePost({
+        verb: "type", before, after, urlBefore, urlAfter: this.currentUrl,
+      }),
+    };
+  }
+
+  async scroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
+    const before = await this.snapshot();
+    const pre = this.watchdog.evaluatePre(before, "scroll", stable_id);
+    if (!pre.ok) return pre.envelope;
+    const urlBefore = this.currentUrl;
+    await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
+    await waitForMutationWindow();
+    const after = await this.snapshot();
+    return {
+      ok: true,
+      warnings: this.watchdog.evaluatePost({
+        verb: "scroll", before, after, urlBefore, urlAfter: this.currentUrl,
+      }),
+    };
+  }
+
+  async press_key(key: string): Promise<ActionResult> {
+    const before = await this.snapshot();
+    const pre = this.watchdog.evaluatePre(before, "press_key", null);
+    if (!pre.ok) return pre.envelope;
+    const urlBefore = this.currentUrl;
+    await dispatchPress(this.cdp, this.sessionId, key);
+    await waitForMutationWindow();
+    const after = await this.snapshot();
+    return {
+      ok: true,
+      warnings: this.watchdog.evaluatePost({
+        verb: "press_key", before, after, urlBefore, urlAfter: this.currentUrl,
+      }),
+    };
+  }
+
   async close(): Promise<void> {
     await this.cdp.close();
     await this.engine.close();
   }
+}
+
+function waitForMutationWindow(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 500));
 }
 
 /**

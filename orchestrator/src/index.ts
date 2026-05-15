@@ -5,7 +5,9 @@ import { SessionManager } from "./session/manager.js";
 import { createHuskServer } from "./http/server.js";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
+import { readFile } from "node:fs/promises";
 import { SiteGraphCache } from "./cache/site-graph.js";
+import type { PolicyDocument } from "./watchdog/types.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -71,6 +73,7 @@ interface StartArgs {
   port: number;
   host: string;
   logLevel: string;
+  policy?: string; // path to policy.yaml
 }
 
 function parseStartArgs(rest: string[]): StartArgs {
@@ -87,6 +90,8 @@ function parseStartArgs(rest: string[]): StartArgs {
       out.host = rest[++i];
     } else if (a === "--log-level" && rest[i + 1]) {
       out.logLevel = rest[++i];
+    } else if (a === "--policy" && rest[i + 1]) {
+      out.policy = rest[++i];
     } else {
       console.error(`husk start: unknown arg ${a}`);
       process.exit(1);
@@ -102,12 +107,23 @@ async function runServer(args: StartArgs): Promise<void> {
   // up so callers see the error rather than a connection refusal.
   const cacheDir = process.env.HUSK_CACHE_DIR ?? pathJoin(homedir(), ".husk", "site-graph");
   const siteGraph = new SiteGraphCache({ cacheDir });
-  const sessions = new SessionManager(() =>
-    Session.create({
+
+  // Load policy YAML once at startup if --policy was passed.
+  let defaultPolicy: PolicyDocument | null = null;
+  if (args.policy) {
+    const { parsePolicy } = await import("./watchdog/policy.js");
+    const yaml = await readFile(args.policy, "utf8");
+    defaultPolicy = parsePolicy(yaml);
+  }
+
+  const sessions = new SessionManager(async () => {
+    const session = await Session.create({
       log: (l) => process.stderr.write(l + "\n"),
       siteGraph,
-    })
-  );
+    });
+    if (defaultPolicy) session.setPolicy(defaultPolicy);
+    return session;
+  });
 
   const server = await createHuskServer({
     port: args.port,
