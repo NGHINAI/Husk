@@ -6,6 +6,7 @@ from typing import Any, Optional
 import httpx
 
 from ._session import Session, ScrollDirection
+from ._snapshot import find_in_snapshot, find_all_in_snapshot
 from ._transport import JsonRpcClient, JsonRpcTransportError, HuskApiError
 from ._types import (
     ActionResult,
@@ -76,6 +77,8 @@ __all__ = [
     "HuskApiError",
     "parse_snapshot",
     "parse_action_result",
+    "find_in_snapshot",
+    "find_all_in_snapshot",
     "__version__",
     "DEFAULT_BASE_URL",
 ]
