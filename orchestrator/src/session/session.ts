@@ -4,6 +4,7 @@ import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { locateLightpanda } from "../engine/binary.js";
+import type { SiteGraphCache } from "../cache/site-graph.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -12,6 +13,8 @@ export interface SessionOptions {
   readinessTimeoutMs?: number;
   /** Logger for engine stderr/stdout. Defaults to no-op. */
   log?: (line: string) => void;
+  /** Optional cache the session writes observations to after every snapshot. */
+  siteGraph?: SiteGraphCache;
 }
 
 /**
@@ -32,7 +35,8 @@ export class Session {
     private readonly cdp: CdpClient,
     private readonly sessionId: string,
     private currentUrl: string,
-    private lastSnapshot: Snapshot | null = null
+    private lastSnapshot: Snapshot | null = null,
+    private readonly siteGraph: SiteGraphCache | null = null
   ) {}
 
   static async create(opts: SessionOptions = {}): Promise<Session> {
@@ -59,7 +63,7 @@ export class Session {
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Accessibility.enable", {}, sessionId);
 
-    return new Session(engine, cdp, sessionId, "about:blank");
+    return new Session(engine, cdp, sessionId, "about:blank", null, opts.siteGraph ?? null);
   }
 
   async goto(url: string): Promise<void> {
@@ -80,6 +84,7 @@ export class Session {
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
     const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl);
     this.lastSnapshot = snap;
+    this.siteGraph?.observe(snap);
     return snap;
   }
 

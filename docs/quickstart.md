@@ -133,3 +133,30 @@ curl -s -X POST $RPC -H 'content-type: application/json' \
 The full OpenAPI spec is at
 [`protocol/jsonrpc.openapi.yaml`](../protocol/jsonrpc.openapi.yaml).
 SDKs in M6 will be generated against this spec.
+
+## Where Husk stores per-domain observations
+
+Every time the orchestrator captures a snapshot, it writes every node's
+metadata (stable_id, role, accessible name, timestamp) into a
+per-domain SQLite database at `~/.husk/site-graph/{domain}.db`. The
+M5 watchdog will use this cache to generate candidate suggestions when
+your agent references an element that no longer exists.
+
+To use a different directory (e.g., for tests or isolated dev):
+
+```sh
+HUSK_CACHE_DIR=/tmp/my-husk-cache \
+  node ./orchestrator/dist/index.js start --port 7777
+```
+
+To clear everything Husk has ever seen on a particular domain:
+
+```sh
+rm ~/.husk/site-graph/example.com.db
+```
+
+The cache is observation-only in v0 — it doesn't gate behavior. M5
+(watchdog) reads from it for rejection-envelope candidate generation,
+and M9 (DOM-drift router) will use it for cross-deploy stable-ID
+resolution. v1.0 vertical recipes are pre-populated site graphs you'll
+be able to ship alongside Husk.
