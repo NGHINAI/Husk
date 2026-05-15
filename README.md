@@ -101,26 +101,35 @@ husk/
 
 ## Performance
 
-Husk pre-warms a pool of lightpanda processes at startup and elastically scales
-up to the system's free-memory limit when concurrent sessions are requested.
-Action results include a `diff` field (`{added, removed, changed}` against the
-prior snapshot) so agents avoid full re-snapshot round-trips.
+Husk pre-warms a pool of lightpanda processes and elastically scales up to
+the system's free-memory limit when concurrent sessions are requested.
+Action results carry a `diff` field so agents avoid full re-snapshot
+round-trips. `husk_batch_visit` lets agents fan out across many URLs in
+a single tool call.
 
-| Workload | Sequential* | Husk parallel (M9) |
-|---|---|---|
-| Visit N URLs, snapshot each (N=50) | ~3 min | **~3.9s** wall clock (actual) |
-| Per-URL avg / p95 | ~1.5s / ~2s | **~2672ms / ~3213ms** |
-| Engine pool warmup (K=4) | n/a | ~121ms |
-| Throughput | ~0.6 URLs/sec | **12.80 URLs/sec** |
+### 50-URL benchmark (measured 2026-05-15)
 
-\* Estimated based on per-URL latency × N.
+| Mode | Wall clock | Throughput | Avg payload | Notes |
+|---|---|---|---|---|
+| `pool` (N parallel sessions, full snapshot per URL) | **2.72s** | 18.36 URLs/sec | 43 KB | Baseline; BENCH_POOL_MAX=10 |
+| `batch_visit` (terse snapshot per URL) | **4.00s** | 12.50 URLs/sec | 172 KB | Single tool call from the agent |
+| `batch_visit` + extract (`.f4.my-3`) | **2.50s** | 19.97 URLs/sec | ~0 bytes | Targeted text only; null for non-matching pages |
 
-Reproduce with:
+Engine pool warmup (K=4 warm processes): ~125 ms. All three runs: 50/50 URLs succeeded.
+
+The `batch_visit` + extract mode is fastest wall-clock because it short-circuits
+after a single CSS query per page with no serialization overhead. The selector
+`.f4.my-3` targets GitHub repo descriptions; pages that don't match (example.com,
+HN home) return `null` text but still count as successful visits.
+
+Reproduce:
 ```bash
-LIGHTPANDA_BIN=<path-to-lightpanda> pnpm --filter husk-orchestrator run bench
+LIGHTPANDA_BIN=<path> BENCH_POOL_MAX=10 pnpm --filter husk-orchestrator run bench
+BENCH_MODE=batch         LIGHTPANDA_BIN=<path> pnpm --filter husk-orchestrator run bench
+BENCH_MODE=batch-extract LIGHTPANDA_BIN=<path> pnpm --filter husk-orchestrator run bench
 ```
 
-Environment overrides: `BENCH_N`, `BENCH_POOL_MIN`, `BENCH_POOL_MAX`.
+Knobs: `BENCH_N` (URL count, default 50), `BENCH_POOL_MIN` (warm processes, default 4), `BENCH_POOL_MAX` (max parallel, default min(50, N)).
 
 Architecture notes — `docs/superpowers/specs/2026-05-13-husk-design.md` §5.6.
 
