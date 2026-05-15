@@ -31,6 +31,9 @@ switch (cmd) {
   case "start":
     await runServer(parseStartArgs(args.slice(1)));
     break;
+  case "vault":
+    await runVault(args.slice(1));
+    break;
   case "help":
   case "--help":
   case "-h":
@@ -45,6 +48,8 @@ Usage:
                                           Start the HTTP/JSON-RPC server on the
                                           given port (default 7777) and host
                                           (default 127.0.0.1). Runs until killed.
+  husk vault list                         List saved cookie profiles
+  husk vault clear <profile>              Clear all cookies in a profile
 
 Coming in later milestones:
   husk run <example>      Run an example agent (M6)
@@ -154,4 +159,39 @@ async function runServer(args: StartArgs): Promise<void> {
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+async function runVault(rest: string[]): Promise<void> {
+  const sub = rest[0];
+  const vaultDir = process.env.HUSK_VAULT_DIR ?? pathJoin(homedir(), ".husk", "vault");
+  const vault = new VaultStore({
+    vaultDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+  try {
+    if (sub === "list") {
+      const profiles = vault.listProfiles();
+      if (profiles.length === 0) {
+        console.log("No profiles.");
+      } else {
+        for (const p of profiles) {
+          const n = vault.list(p).length;
+          console.log(`${p}\t${n} cookie${n === 1 ? "" : "s"}`);
+        }
+      }
+    } else if (sub === "clear") {
+      const profile = rest[1];
+      if (!profile) {
+        console.error("Usage: husk vault clear <profile>");
+        process.exit(1);
+      }
+      vault.clear(profile);
+      console.log(`Cleared ${profile}.`);
+    } else {
+      console.error("Usage: husk vault list | husk vault clear <profile>");
+      process.exit(1);
+    }
+  } finally {
+    vault.close();
+  }
 }
