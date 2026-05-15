@@ -71,6 +71,14 @@ make test
 
 # Demo: drive lightpanda end-to-end
 node ./orchestrator/dist/index.js demo https://example.com | head -50
+
+# Or run the full HTTP/JSON-RPC server (M3 — runs until you Ctrl-C)
+node ./orchestrator/dist/index.js start --port 7777
+
+# In another terminal — drive Husk over HTTP
+curl -s -X POST http://127.0.0.1:7777/v1/jsonrpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"create_session"}'
 ```
 
 Full quickstart: [`docs/quickstart.md`](./docs/quickstart.md)
