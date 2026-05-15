@@ -36,7 +36,7 @@ export async function batchVisit(
           const text = await session.extract({ css: params.extract.css });
           return { url, ok: true, text };
         }
-        const snapshot = await session.snapshot();
+        const snapshot = await session.snapshot({ mode: "terse" });
         return { url, ok: true, snapshot };
       } catch (e) {
         return { url, ok: false, error: (e as Error).message };
