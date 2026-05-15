@@ -1,7 +1,7 @@
 """Per-session async API for Husk."""
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from ._transport import JsonRpcClient
 from ._types import ActionResult, Snapshot, parse_action_result, parse_snapshot
@@ -49,6 +49,13 @@ class Session:
 
     async def set_policy(self, policy_yaml: Optional[str]) -> None:
         await self._client.call("set_policy", {"session_id": self._id, "policy_yaml": policy_yaml})
+
+    async def login(self, *, profile: str, key: str) -> dict[str, Any]:
+        return await self._client.call("login", {
+            "session_id": self._id,
+            "profile": profile,
+            "key": key,
+        })
 
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})
