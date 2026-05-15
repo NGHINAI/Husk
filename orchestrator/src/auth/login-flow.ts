@@ -79,9 +79,18 @@ export async function performLogin(session: SessionLike, input: LoginInput): Pro
   const c = await session.click(fields.submit.i);
   if (!c.ok) return { ok: false, reason: "watchdog_rejected", detail: c };
 
-  const after = await session.snapshot();
+  let after = await session.snapshot();
   const url_before = before.url;
-  const url_after = after.url;
+  let url_after = after.url;
+
+  // Belt-and-suspenders: some engines (e.g. lightpanda) don't fire form submit
+  // via a click on <button type="submit">. If URL didn't change and the password
+  // field is still on-page, fall back to pressing Enter on the password field.
+  if (url_before === url_after && locateLoginFields(after).password && session.pressKey) {
+    await session.pressKey("Enter");
+    after = await session.snapshot();
+    url_after = after.url;
+  }
 
   if (url_before !== url_after) {
     const afterFields = locateLoginFields(after);

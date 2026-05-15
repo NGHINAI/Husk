@@ -1,5 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { parse as parseQuery } from "node:querystring";
 
 export interface LoginFixtureServer {
   url: string;
@@ -35,9 +36,19 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 export async function startLoginFixture(): Promise<LoginFixtureServer> {
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.url === "/login" && req.method === "POST") {
-      res.setHeader("set-cookie", "husk_demo_session=valid; Path=/; HttpOnly");
-      res.writeHead(303, { Location: "/protected" });
-      res.end();
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => {
+        const fields = parseQuery(body);
+        if (fields.user === "demo" && fields.pass === "secret") {
+          res.setHeader("set-cookie", "husk_demo_session=valid; Path=/; HttpOnly");
+          res.writeHead(303, { Location: "/protected" });
+          res.end();
+        } else {
+          res.writeHead(401, { "content-type": "text/html" });
+          res.end(`<!DOCTYPE html><html><body><h1>Wrong credentials</h1></body></html>`);
+        }
+      });
       return;
     }
     if (req.url === "/protected") {

@@ -213,7 +213,7 @@ export class Session {
 
   async login(input: LoginInput & { totp_secret?: string }): Promise<LoginResult> {
     const code = input.totp_code ?? (input.totp_secret ? totpCode(input.totp_secret) : undefined);
-    return await performLogin(
+    const result = await performLogin(
       {
         snapshot: () => this.snapshot(),
         type: (id, text) => this.type(id, text),
@@ -222,6 +222,107 @@ export class Session {
       },
       { username: input.username, password: input.password, totp_code: code }
     );
+
+    // Fallback: some browsers (e.g. lightpanda) assign role="none" to
+    // type="password" inputs, hiding them from the accessibility tree and
+    // causing performLogin to return login_form_not_found. Try a CDP
+    // JavaScript-based form fill when that happens.
+    if (!result.ok && result.reason === "login_form_not_found") {
+      const jsResult = await this.jsFormLogin(input.username, input.password);
+      if (jsResult !== null) return jsResult;
+    }
+
+    return result;
+  }
+
+  /**
+   * JavaScript-based form fill fallback for engines where password inputs are
+   * not exposed in the accessibility tree. Uses Runtime.evaluate to set input
+   * values and calls form.submit(). Returns null when JS evaluation is
+   * unavailable or the form cannot be located.
+   */
+  private async jsFormLogin(username: string, password: string): Promise<LoginResult | null> {
+    const urlBefore = this.currentUrl;
+    try {
+      // Collect cookies before submit to detect newly added ones.
+      let cookiesBefore: Array<{ name: string; value: string }> = [];
+      try {
+        const res = (await this.cdp.send("Network.getCookies", {}, this.sessionId)) as {
+          cookies: Array<{ name: string; value: string }>;
+        };
+        cookiesBefore = res.cookies;
+      } catch { /* Network.getCookies unavailable; proceed without cookie check */ }
+
+      // Fill username and password by CSS attribute selectors.
+      const fillExpr = `
+        (function() {
+          const usernameField =
+            document.querySelector('input[type="text"]') ||
+            document.querySelector('input[type="email"]') ||
+            document.querySelector('input[name*="user"]') ||
+            document.querySelector('input[name*="email"]') ||
+            document.querySelector('input[name*="login"]');
+          const passwordField = document.querySelector('input[type="password"]');
+          const form = document.querySelector('form');
+          if (!usernameField || !passwordField || !form) return "MISSING_FIELDS";
+          usernameField.value = ${JSON.stringify(username)};
+          passwordField.value = ${JSON.stringify(password)};
+          return JSON.stringify({ action: form.action });
+        })()
+      `;
+      const fillRes = (await this.cdp.send(
+        "Runtime.evaluate",
+        { expression: fillExpr, returnByValue: true },
+        this.sessionId
+      )) as { result: { type: string; value: unknown } };
+
+      if (fillRes.result.value === "MISSING_FIELDS") return null;
+
+      // Submit the form.
+      await this.cdp.send(
+        "Runtime.evaluate",
+        { expression: "document.querySelector('form').submit(); undefined", returnByValue: true },
+        this.sessionId
+      );
+
+      // Wait for the navigation to settle.
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // Check for newly added cookies — presence of new cookies indicates
+      // the server accepted the credentials and established a session.
+      let newCookies: Array<{ name: string; value: string }> = [];
+      try {
+        const res = (await this.cdp.send("Network.getCookies", {}, this.sessionId)) as {
+          cookies: Array<{ name: string; value: string }>;
+        };
+        newCookies = res.cookies.filter(
+          (c) => !cookiesBefore.some((b) => b.name === c.name && b.value === c.value)
+        );
+      } catch { /* ignore */ }
+
+      // Try to get the actual URL the browser landed on after form submit.
+      let urlAfter = this.currentUrl;
+      try {
+        const locRes = (await this.cdp.send(
+          "Runtime.evaluate",
+          { expression: "window.location.href", returnByValue: true },
+          this.sessionId
+        )) as { result: { type: string; value: unknown } };
+        if (typeof locRes.result.value === "string" && locRes.result.value) {
+          urlAfter = locRes.result.value;
+        }
+      } catch { /* ignore */ }
+
+      if (newCookies.length > 0) {
+        return { ok: true, url_before: urlBefore, url_after: urlAfter };
+      }
+
+      // No new cookies — login likely failed.
+      return { ok: false, reason: "login_did_not_advance" };
+    } catch {
+      // Runtime.evaluate or Network.getCookies not supported.
+      return null;
+    }
   }
 
   async close(): Promise<void> {
