@@ -45,6 +45,8 @@ export interface SessionOptions {
 export type ActionResult = { ok: true; warnings: Warning[] } | RejectionEnvelope;
 
 export class Session {
+  private lastSnapshotAt = 0;
+
   private constructor(
     private readonly engine: LightpandaProcess,
     private readonly cdp: CdpClient,
@@ -110,22 +112,19 @@ export class Session {
     }
   }
 
-  async snapshot(opts?: { force?: boolean }): Promise<Snapshot> {
-    // Return cached snapshot when available and force-refresh is not requested.
-    // T3 will replace this with a time-based freshness window; for now any
-    // cached value is considered fresh until the next navigation or forced fetch.
-    if (this.lastSnapshot && !opts?.force) {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean } = {}): Promise<Snapshot> {
+    const maxAge = opts.maxAgeMs ?? 500;
+    if (!opts.force && this.lastSnapshot && Date.now() - this.lastSnapshotAt < maxAge) {
       return this.lastSnapshot;
     }
     const tree = (await this.cdp.send(
-      "Accessibility.getFullAXTree",
-      {},
-      this.sessionId
+      "Accessibility.getFullAXTree", {}, this.sessionId
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
     const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl);
     this.lastSnapshot = snap;
+    this.lastSnapshotAt = Date.now();
     this.siteGraph?.observe(snap);
     return snap;
   }
