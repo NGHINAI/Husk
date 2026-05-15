@@ -186,6 +186,15 @@ export const METHODS = {
     return { profiles: ctx.credentials.listProfiles() };
   },
 
+  async extract(
+    params: { session_id: string; css: string },
+    ctx: MethodContext
+  ): Promise<{ text: string | null }> {
+    const session = ctx.sessions.get(params.session_id);
+    const text = await session.extract({ css: params.css });
+    return { text };
+  },
+
   async login(
     params: {
       session_id: string;
