@@ -99,6 +99,31 @@ husk/
 └── docs/           # Quickstart, architecture, policy rules, specs
 ```
 
+## Performance
+
+Husk pre-warms a pool of lightpanda processes at startup and elastically scales
+up to the system's free-memory limit when concurrent sessions are requested.
+Action results include a `diff` field (`{added, removed, changed}` against the
+prior snapshot) so agents avoid full re-snapshot round-trips.
+
+| Workload | Sequential* | Husk parallel (M9) |
+|---|---|---|
+| Visit N URLs, snapshot each (N=50) | ~3 min | **~3.9s** wall clock (actual) |
+| Per-URL avg / p95 | ~1.5s / ~2s | **~2672ms / ~3213ms** |
+| Engine pool warmup (K=4) | n/a | ~121ms |
+| Throughput | ~0.6 URLs/sec | **12.80 URLs/sec** |
+
+\* Estimated based on per-URL latency × N.
+
+Reproduce with:
+```bash
+LIGHTPANDA_BIN=<path-to-lightpanda> pnpm --filter husk-orchestrator run bench
+```
+
+Environment overrides: `BENCH_N`, `BENCH_POOL_MIN`, `BENCH_POOL_MAX`.
+
+Architecture notes — `docs/superpowers/specs/2026-05-13-husk-design.md` §5.6.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing

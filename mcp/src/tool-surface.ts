@@ -13,7 +13,7 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns { session_id }. Pass `profile` to bind the session to a named cookie vault (cookies persist across sessions).",
+    description: "Husk — Create a new browser session. Returns { session_id }. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks.",
     inputSchema: {
       type: "object",
       properties: {
@@ -35,16 +35,19 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_snapshot",
-    description: "Husk — Return a compressed accessibility-tree snapshot of the current page.",
+    description: "Husk — Return a semantic-tree snapshot of the current page. CACHED: if a snapshot was captured within the last 500ms, returns it from cache. Pass `max_age_ms: 0` to force a fresh capture. Each husk_goto auto-captures the snapshot so the first call after navigation is almost always a cache hit.",
     inputSchema: {
       type: "object",
-      properties: { session_id: { type: "string" } },
+      properties: {
+        session_id: { type: "string" },
+        max_age_ms: { type: "number", description: "Cache TTL in milliseconds. Default 500. Pass 0 to force." },
+      },
       required: ["session_id"],
     },
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element by stable_id. Watchdog-protected: returns a rejection envelope with candidates if the element doesn't exist or fails sanity checks. NOTE: For submitting login forms, use `husk_login` instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
+    description: "Husk — Click an element by stable_id. Watchdog-protected. The result INCLUDES a `diff` field showing what changed in the page after the action ({added, removed, changed} nodes), so you typically don't need a separate snapshot after a click. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +59,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_type",
-    description: "Husk — Type into a text field by stable_id. Watchdog-protected. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead — it handles the engine quirks and submits the form correctly.",
+    description: "Husk — Type into a text field by stable_id. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead — it handles the engine quirks and submits the form correctly.",
     inputSchema: {
       type: "object",
       properties: {
@@ -69,7 +72,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_scroll",
-    description: "Husk — Scroll the page or an element into view.",
+    description: "Husk — Scroll the page or an element into view. Result includes a `diff` field showing what's now visible.",
     inputSchema: {
       type: "object",
       properties: {
@@ -83,7 +86,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_press_key",
-    description: "Husk — Press a single key (Enter, Tab, Escape, ArrowUp/Down/Left/Right, Backspace, Space).",
+    description: "Husk — Press a single key (Enter, Tab, Escape, ArrowUp/Down/Left/Right, Backspace, Space). Result includes a `diff` field showing what changed after the keypress.",
     inputSchema: {
       type: "object",
       properties: {
@@ -152,12 +155,22 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["profile", "key", "username", "password"],
     },
   },
+  {
+    name: "husk_snapshot_diff",
+    description: "Husk — Return the {added, removed, changed} diff against the previous snapshot in this session. Much cheaper than husk_snapshot when you just need to know what changed after an action. Returns null on the first call (no prior snapshot to compare against).",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string" } },
+      required: ["session_id"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
   husk_create_session: "create_session",
   husk_goto: "goto",
   husk_snapshot: "snapshot",
+  husk_snapshot_diff: "snapshot_diff",
   husk_click: "click",
   husk_type: "type",
   husk_scroll: "scroll",

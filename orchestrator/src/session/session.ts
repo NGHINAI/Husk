@@ -13,6 +13,7 @@ import { captureCookies } from "../vault/capture.js";
 import { restoreCookies } from "../vault/restore.js";
 import { performLogin, type LoginInput, type LoginResult } from "../auth/login-flow.js";
 import { totpCode } from "../auth/totp.js";
+import type { EngineHandle } from "../engine/pool.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -28,6 +29,10 @@ export interface SessionOptions {
   /** Profile name. When supplied with `vault`, cookies are restored on create
    *  and captured on close. */
   profile?: string;
+  /** Pre-acquired engine handle from a pool. If supplied, Session.create
+   *  uses this instead of spawning a fresh lightpanda. The handle's release()
+   *  is invoked on Session.close(). */
+  engine?: EngineHandle | null;
 }
 
 /**
@@ -42,9 +47,11 @@ export interface SessionOptions {
  *      or `null` if there is no prior. The current snapshot becomes the new baseline.
  *   5. `session.close()` — disconnects and kills the subprocess.
  */
-export type ActionResult = { ok: true; warnings: Warning[] } | RejectionEnvelope;
+export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
 
 export class Session {
+  private lastSnapshotAt = 0;
+
   private constructor(
     private readonly engine: LightpandaProcess,
     private readonly cdp: CdpClient,
@@ -54,23 +61,36 @@ export class Session {
     private readonly siteGraph: SiteGraphCache | null = null,
     private readonly watchdog: Watchdog,
     private readonly vault: VaultStore | null = null,
-    private profile: string | null = null
+    private profile: string | null = null,
+    private readonly engineHandle: EngineHandle | null = null
   ) {}
 
   static async create(opts: SessionOptions = {}): Promise<Session> {
-    const binary = opts.binary ?? (await locateLightpanda());
-    const engine = await spawnLightpanda({
-      binary,
-      readinessTimeoutMs: opts.readinessTimeoutMs,
-      log: opts.log,
-    });
+    let engineProcess: LightpandaProcess;
+    let engineHandle: EngineHandle | null = null;
+
+    if (opts.engine) {
+      engineHandle = opts.engine;
+      engineProcess = opts.engine.process;
+    } else {
+      const binary = opts.binary ?? (await locateLightpanda());
+      engineProcess = await spawnLightpanda({
+        binary,
+        readinessTimeoutMs: opts.readinessTimeoutMs,
+        log: opts.log,
+      });
+    }
 
     // Discover the CDP WebSocket.
     // lightpanda returns an empty /json/list until a target is created, so we
     // fall back to /json/version which always carries the browser-level WS URL.
-    const wsUrl = await resolveBrowserWsUrl(engine.cdpBaseUrl);
+    const wsUrl = await resolveBrowserWsUrl(engineProcess.cdpBaseUrl);
     if (!wsUrl) {
-      await engine.close();
+      if (engineHandle) {
+        await engineHandle.release();
+      } else {
+        await engineProcess.close();
+      }
       throw new Error("Session.create: could not discover CDP WebSocket URL from /json/list or /json/version");
     }
     const cdp = new CdpClient(wsUrl);
@@ -83,10 +103,11 @@ export class Session {
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
     const inst = new Session(
-      engine, cdp, sessionId, "about:blank", null,
+      engineProcess, cdp, sessionId, "about:blank", null,
       opts.siteGraph ?? null, wd,
       opts.vault ?? null,
-      opts.profile ?? null
+      opts.profile ?? null,
+      engineHandle
     );
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
@@ -100,18 +121,29 @@ export class Session {
     // Crude wait — sufficient for v0. M5 will hook Page.loadEventFired.
     // Bumped from 1000ms to 1500ms to match the M2 spike PoC's working timing.
     await new Promise((r) => setTimeout(r, 1500));
+    // Eager snapshot: cache lastSnapshot so the agent's next snapshot() call is instant.
+    // Use force:true so navigation always fetches a fresh AX tree (not a stale cache).
+    // Best-effort: don't fail goto if AX capture has a transient issue.
+    try {
+      await this.snapshot({ force: true });
+    } catch {
+      // best-effort
+    }
   }
 
-  async snapshot(): Promise<Snapshot> {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean } = {}): Promise<Snapshot> {
+    const maxAge = opts.maxAgeMs ?? 500;
+    if (!opts.force && this.lastSnapshot && Date.now() - this.lastSnapshotAt < maxAge) {
+      return this.lastSnapshot;
+    }
     const tree = (await this.cdp.send(
-      "Accessibility.getFullAXTree",
-      {},
-      this.sessionId
+      "Accessibility.getFullAXTree", {}, this.sessionId
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
     const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl);
     this.lastSnapshot = snap;
+    this.lastSnapshotAt = Date.now();
     this.siteGraph?.observe(snap);
     return snap;
   }
@@ -144,12 +176,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "click", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -170,12 +203,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "type", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -186,12 +220,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "scroll", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -202,12 +237,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "press_key", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -328,7 +364,11 @@ export class Session {
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
-    await this.engine.close();
+    if (this.engineHandle) {
+      await this.engineHandle.release();
+    } else {
+      await this.engine.close();
+    }
   }
 
   async restoreFromVault(): Promise<void> {
@@ -387,12 +427,11 @@ export interface SessionInjected {
   fromInjected: (i: SessionInjected) => Session;
 }).fromInjected = (i: SessionInjected): Session => {
   const fakeCdp = { ...i.cdp, close: i.cdp.close ?? (async () => {}) };
-  // Build a minimal watchdog-like object that satisfies Watchdog's interface
-  const fakeWatchdog = {
-    evaluatePre: () => ({ ok: true as const, backendNodeId: null }),
-    evaluatePost: () => [],
-    setPolicy: () => {},
-  } as unknown as Watchdog;
+  // Use a real Watchdog so that evaluatePre can resolve backendNodeId via the
+  // snapshot's _resolver (populated by transformAxTree). Tests that need DOM
+  // interactions (click, type) will work correctly as long as the CDP mock
+  // returns a valid DOM.getBoxModel response.
+  const fakeWatchdog = new Watchdog();
 
   return new (Session as unknown as new (
     engine: unknown,

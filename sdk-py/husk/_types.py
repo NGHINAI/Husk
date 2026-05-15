@@ -71,6 +71,7 @@ class Warning_:  # `Warning` shadows Python's builtin; re-exported as `Warning` 
 class SuccessResult:
     ok: Literal[True]
     warnings: tuple[Warning_, ...] = ()
+    diff: Optional[SnapshotDiff] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,11 +141,21 @@ def parse_cookie(d: Mapping[str, Any]) -> Cookie:
     )
 
 
+def _parse_snapshot_diff(d: Mapping[str, Any]) -> SnapshotDiff:
+    return SnapshotDiff(
+        added=tuple(_parse_node(n) for n in d.get("added", [])),
+        removed=tuple(d.get("removed", [])),
+        changed=tuple(d.get("changed", [])),
+    )
+
+
 def parse_action_result(d: Mapping[str, Any]) -> ActionResult:
     if d.get("ok") is True:
+        raw_diff = d.get("diff")
         return SuccessResult(
             ok=True,
             warnings=tuple(Warning_(reason=w["reason"], message=w["message"]) for w in d.get("warnings", [])),
+            diff=_parse_snapshot_diff(raw_diff) if raw_diff is not None else None,
         )
     return RejectionEnvelope(
         ok=False,

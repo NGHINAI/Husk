@@ -10,6 +10,8 @@ import { join as pathJoin } from "node:path";
 import { readFile } from "node:fs/promises";
 import { SiteGraphCache } from "./cache/site-graph.js";
 import type { PolicyDocument } from "./watchdog/types.js";
+import { EnginePool } from "./engine/pool.js";
+import { locateLightpanda } from "./engine/binary.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -143,15 +145,33 @@ async function runServer(args: StartArgs): Promise<void> {
     defaultPolicy = parsePolicy(yaml);
   }
 
+  const lightpandaBin = await locateLightpanda();
+  const pool = new EnginePool({
+    minWarm: parseInt(process.env.HUSK_POOL_MIN_WARM ?? "4", 10),
+    maxParallel: process.env.HUSK_POOL_MAX_PARALLEL
+      ? parseInt(process.env.HUSK_POOL_MAX_PARALLEL, 10)
+      : undefined, // defaults to computeMaxParallel()
+    spawnOptions: { binary: lightpandaBin, readinessTimeoutMs: 15_000 },
+  });
+  await pool.ready();
+
   const sessions = new SessionManager(async (opts) => {
-    const session = await Session.create({
-      log: (l) => process.stderr.write(l + "\n"),
-      siteGraph,
-      vault,
-      profile: opts?.profile,
-    });
-    if (defaultPolicy) session.setPolicy(defaultPolicy);
-    return session;
+    const engineHandle = await pool.acquire();
+    try {
+      const session = await Session.create({
+        log: (l) => process.stderr.write(l + "\n"),
+        siteGraph,
+        vault,
+        profile: opts?.profile,
+        engine: engineHandle,
+      });
+      if (defaultPolicy) session.setPolicy(defaultPolicy);
+      return session;
+    } catch (e) {
+      // If Session.create fails, release the handle back to the pool.
+      await engineHandle.release();
+      throw e;
+    }
   });
 
   const server = await createHuskServer({
@@ -168,6 +188,7 @@ async function runServer(args: StartArgs): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     server.log.info({ signal }, "husk: shutting down");
     await sessions.closeAll();
+    await pool.close();
     siteGraph.close();
     vault.close();
     credentials.close();

@@ -73,7 +73,7 @@ export interface Warning {
   message: string;
 }
 
-export type ActionResult = { ok: true; warnings: Warning[] } | RejectionEnvelope;
+export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
 
 // ----- Policy types (parsed server-side via set_policy; SDK sends raw YAML) -----
 
