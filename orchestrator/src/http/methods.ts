@@ -84,6 +84,38 @@ export const METHODS = {
     await ctx.sessions.close(params.session_id);
     return { ok: true };
   },
+
+  async click(
+    params: { session_id: string; stable_id: string },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return await session.click(params.stable_id);
+  },
+
+  async type(
+    params: { session_id: string; stable_id: string; text: string },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return await session.type(params.stable_id, params.text);
+  },
+
+  async scroll(
+    params: { session_id: string; stable_id: string | null; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return await session.scroll(params.stable_id, params.direction, params.amount);
+  },
+
+  async press_key(
+    params: { session_id: string; key: string },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return await session.press_key(params.key);
+  },
 } as const;
 
 /** Type-level enumeration of all method names. */

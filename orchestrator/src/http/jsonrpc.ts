@@ -1,6 +1,24 @@
 import { JSONRPC_ERROR_CODES, toJsonRpcError } from "./errors.js";
 import { METHODS, type MethodContext, type MethodName } from "./methods.js";
 
+/**
+ * Strip internal-only fields (e.g. SelectorResolver instances) before
+ * returning a result to the wire. Mutates and returns the same value.
+ */
+function stripInternalFields(v: unknown): unknown {
+  if (!v || typeof v !== "object") return v;
+  const obj = v as Record<string, unknown>;
+  // A Snapshot has shape { v, url, count, root, [_resolver] }
+  if ("v" in obj && "url" in obj && "root" in obj && "_resolver" in obj) {
+    delete obj._resolver;
+  }
+  // A rejection envelope has shape { ok: false, ..., snapshot_at_attempt }
+  if ("snapshot_at_attempt" in obj) {
+    stripInternalFields(obj.snapshot_at_attempt);
+  }
+  return v;
+}
+
 export type JsonRpcId = string | number | null;
 
 export interface JsonRpcRequest {
@@ -72,7 +90,7 @@ export async function dispatch(req: unknown, ctx: MethodContext): Promise<JsonRp
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await (handler as any)(req.params ?? {}, ctx);
-    return { jsonrpc: "2.0", id: req.id, result };
+    return { jsonrpc: "2.0", id: req.id, result: stripInternalFields(result) };
   } catch (err) {
     return { jsonrpc: "2.0", id: req.id, error: toJsonRpcError(err) };
   }
