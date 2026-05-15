@@ -164,6 +164,39 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id"],
     },
   },
+  {
+    name: "husk_extract",
+    description: "Husk — Extract text from the current page by CSS selector. Runs document.querySelector and returns the matched element's textContent (trimmed), or null if no match. MUCH cheaper than husk_snapshot when you know what you want — ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB. Use this after husk_goto when you need a specific value from the page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        css: { type: "string", description: "CSS selector. The first matching element's textContent is returned." },
+      },
+      required: ["session_id", "css"],
+    },
+  },
+  {
+    name: "husk_batch_visit",
+    description: "Husk — Visit MANY URLs in parallel and return results as one array. THE RIGHT TOOL FOR ANY LIST OF URLS YOU NEED TO PROCESS — instead of calling husk_goto + husk_snapshot 50 times sequentially, call husk_batch_visit once with all 50 URLs. Husk fans out across its engine pool automatically (~5-50 parallel sessions based on available memory). Pass `extract: { css: '...' }` to get JUST the matched text per URL (much smaller payload than full snapshots). Without extract, returns a terse snapshot per URL. Per-URL errors are isolated (one bad URL doesn't break the rest). Results array preserves input URL order.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        urls: {
+          type: "array",
+          items: { type: "string" },
+          description: "URLs to visit in parallel.",
+        },
+        extract: {
+          type: "object",
+          description: "Optional: instead of returning a full snapshot per URL, run document.querySelector(css).textContent and return just that string. Massively reduces token cost for batch reads.",
+          properties: { css: { type: "string" } },
+          required: ["css"],
+        },
+      },
+      required: ["urls"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -180,6 +213,8 @@ const RPC_MAP: Record<string, string> = {
   husk_vault_clear: "vault_clear",
   husk_login: "login",
   husk_credentials_set: "credentials_set",
+  husk_extract: "extract",
+  husk_batch_visit: "batch_visit",
 };
 
 const VERSION = "0.0.0";
