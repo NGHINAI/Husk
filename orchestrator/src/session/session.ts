@@ -43,14 +43,15 @@ export class Session {
       log: opts.log,
     });
 
-    // Discover the CDP WebSocket via /json/list and open a connection.
-    const listRes = await fetch(`${engine.cdpBaseUrl}/json/list`);
-    const targets = (await listRes.json()) as Array<{ webSocketDebuggerUrl?: string }>;
-    if (!targets[0]?.webSocketDebuggerUrl) {
+    // Discover the CDP WebSocket.
+    // lightpanda returns an empty /json/list until a target is created, so we
+    // fall back to /json/version which always carries the browser-level WS URL.
+    const wsUrl = await resolveBrowserWsUrl(engine.cdpBaseUrl);
+    if (!wsUrl) {
       await engine.close();
-      throw new Error("Session.create: lightpanda /json/list returned no usable target");
+      throw new Error("Session.create: could not discover CDP WebSocket URL from /json/list or /json/version");
     }
-    const cdp = new CdpClient(targets[0].webSocketDebuggerUrl);
+    const cdp = new CdpClient(wsUrl);
     await cdp.ready;
 
     // Create a fresh target and attach to it (sessionId for subsequent calls).
@@ -65,7 +66,8 @@ export class Session {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
     // Crude wait — sufficient for v0. M5 will hook Page.loadEventFired.
-    await new Promise((r) => setTimeout(r, 1000));
+    // Bumped from 1000ms to 1500ms to match the M2 spike PoC's working timing.
+    await new Promise((r) => setTimeout(r, 1500));
   }
 
   async snapshot(): Promise<Snapshot> {
@@ -92,4 +94,35 @@ export class Session {
     await this.cdp.close();
     await this.engine.close();
   }
+}
+
+/**
+ * Resolve the browser-level CDP WebSocket URL.
+ *
+ * lightpanda returns an empty /json/list until a target is created, so we
+ * try /json/list first (standard Chrome behaviour) and fall back to
+ * /json/version which always carries webSocketDebuggerUrl in lightpanda.
+ */
+async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
+  // 1. Try /json/list (standard Chrome DevTools convention)
+  try {
+    const res = await fetch(`${cdpBaseUrl}/json/list`);
+    if (res.ok) {
+      const targets = (await res.json()) as Array<{ webSocketDebuggerUrl?: string }>;
+      if (targets[0]?.webSocketDebuggerUrl) return targets[0].webSocketDebuggerUrl;
+    }
+  } catch {
+    // fall through
+  }
+  // 2. Fall back to /json/version (lightpanda exposes browser-level WS here)
+  try {
+    const res = await fetch(`${cdpBaseUrl}/json/version`);
+    if (res.ok) {
+      const info = (await res.json()) as { webSocketDebuggerUrl?: string };
+      if (info.webSocketDebuggerUrl) return info.webSocketDebuggerUrl;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }

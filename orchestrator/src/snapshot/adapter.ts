@@ -30,12 +30,15 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
   let count = 0;
   const visit = (node: AXNode, parentXpath: string, indexInParent: number): SnapshotNode | SnapshotNode[] => {
     const role = node.role?.value ?? "generic";
-    // For passthrough nodes: emit their children flattened into our parent's child list.
-    if (isPassthroughRole(role)) {
+    // Walk through (don't emit) both: passthrough-role nodes AND `ignored: true`
+    // nodes. Both mean "this node has no semantic value of its own — surface its
+    // descendants." CDP marks layout wrappers (e.g., implicit body/div containers)
+    // with `ignored: true`; we still want their descendants.
+    if (node.ignored || isPassthroughRole(role)) {
       const childNodes = (node.childIds ?? [])
         .map((cid, i) => {
           const child = byId.get(cid);
-          if (!child || child.ignored) return null;
+          if (!child) return null;
           return visit(child, parentXpath, indexInParent + i);
         })
         .filter((x): x is SnapshotNode | SnapshotNode[] => x != null)
@@ -55,7 +58,7 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
     let childIdx = 0;
     for (const cid of node.childIds ?? []) {
       const child = byId.get(cid);
-      if (!child || child.ignored) continue;
+      if (!child) continue;
       const transformed = visit(child, xpath, childIdx);
       if (Array.isArray(transformed)) {
         children.push(...transformed);
