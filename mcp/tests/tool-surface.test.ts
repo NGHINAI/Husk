@@ -141,3 +141,25 @@ describe("snapshot_diff tool", () => {
     expect(client.call).toHaveBeenCalledWith("snapshot_diff", { session_id: "s1" });
   });
 });
+
+describe("parallelism + diff descriptions (M9)", () => {
+  it("husk_create_session description mentions parallel-safe behavior", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_create_session")!;
+    expect(t.description.toLowerCase()).toMatch(/parallel/);
+  });
+
+  it("husk_click description mentions diff field in result", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_click")!;
+    expect(t.description.toLowerCase()).toMatch(/diff/);
+  });
+
+  it("husk_snapshot description mentions cache or freshness", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_snapshot")!;
+    expect(t.description.toLowerCase()).toMatch(/cache|fresh|max_age/);
+  });
+
+  it("husk_snapshot schema accepts optional max_age_ms parameter", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_snapshot")!;
+    expect(t.inputSchema.properties.max_age_ms).toBeDefined();
+  });
+});
