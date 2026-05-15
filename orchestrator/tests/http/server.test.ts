@@ -26,6 +26,7 @@ describe("createHuskServer", () => {
       sessions: fakeMgr(),
       version: "0.0.0-test",
       logLevel: "silent",
+      vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any,
     });
     const res = await fetch(`http://127.0.0.1:${server.port}/v1/jsonrpc`, {
       method: "POST",
@@ -45,6 +46,7 @@ describe("createHuskServer", () => {
       sessions: fakeMgr(),
       version: "x",
       logLevel: "silent",
+      vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any,
     });
     const res = await fetch(`http://127.0.0.1:${server.port}/v1/jsonrpc`, {
       method: "POST",
@@ -63,6 +65,7 @@ describe("createHuskServer", () => {
       sessions: fakeMgr(),
       version: "x",
       logLevel: "silent",
+      vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any,
     });
     const res = await fetch(`http://127.0.0.1:${server.port}/v1/jsonrpc`, { method: "GET" });
     expect(res.status).toBe(405);
@@ -75,6 +78,7 @@ describe("createHuskServer", () => {
       sessions: fakeMgr(),
       version: "x",
       logLevel: "silent",
+      vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any,
     });
     const port = server.port;
     await server.stop();

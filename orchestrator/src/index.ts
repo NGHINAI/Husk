@@ -3,6 +3,7 @@ import { getVersion } from "./version.js";
 import { Session } from "./session/session.js";
 import { SessionManager } from "./session/manager.js";
 import { createHuskServer } from "./http/server.js";
+import { VaultStore } from "./vault/store.js";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -108,6 +109,12 @@ async function runServer(args: StartArgs): Promise<void> {
   const cacheDir = process.env.HUSK_CACHE_DIR ?? pathJoin(homedir(), ".husk", "site-graph");
   const siteGraph = new SiteGraphCache({ cacheDir });
 
+  const vaultDir = process.env.HUSK_VAULT_DIR ?? pathJoin(homedir(), ".husk", "vault");
+  const vault = new VaultStore({
+    vaultDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+
   // Load policy YAML once at startup if --policy was passed.
   let defaultPolicy: PolicyDocument | null = null;
   if (args.policy) {
@@ -120,6 +127,7 @@ async function runServer(args: StartArgs): Promise<void> {
     const session = await Session.create({
       log: (l) => process.stderr.write(l + "\n"),
       siteGraph,
+      vault,
       profile: opts?.profile,
     });
     if (defaultPolicy) session.setPolicy(defaultPolicy);
@@ -132,6 +140,7 @@ async function runServer(args: StartArgs): Promise<void> {
     sessions,
     version: getVersion(),
     logLevel: args.logLevel,
+    vault,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM
@@ -139,6 +148,7 @@ async function runServer(args: StartArgs): Promise<void> {
     server.log.info({ signal }, "husk: shutting down");
     await sessions.closeAll();
     siteGraph.close();
+    vault.close();
     await server.stop();
     process.exit(0);
   };

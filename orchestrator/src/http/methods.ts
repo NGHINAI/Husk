@@ -1,12 +1,14 @@
 import type { SessionManager } from "../session/manager.js";
 import type { Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { InvalidUrlError } from "./errors.js";
+import type { VaultStore } from "../vault/store.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
   sessions: SessionManager;
   /** Husk version string (mirrored from package.json / orchestrator/src/version.ts). */
   version: string;
+  vault: VaultStore;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -40,8 +42,11 @@ export const METHODS = {
     return { ok: true, version: ctx.version, activeSessions: ctx.sessions.activeCount() };
   },
 
-  async create_session(_params: unknown, ctx: MethodContext): Promise<CreateSessionResult> {
-    const session_id = await ctx.sessions.create();
+  async create_session(
+    params: { profile?: string } | undefined,
+    ctx: MethodContext
+  ): Promise<CreateSessionResult> {
+    const session_id = await ctx.sessions.create({ profile: params?.profile });
     return { session_id };
   },
 
@@ -129,6 +134,27 @@ export const METHODS = {
     const { parsePolicy } = await import("../watchdog/policy.js");
     const parsed = parsePolicy(params.policy_yaml);
     session.setPolicy(parsed);
+    return { ok: true };
+  },
+
+  async vault_list_profiles(_params: unknown, ctx: MethodContext) {
+    return { profiles: ctx.vault.listProfiles() };
+  },
+
+  async vault_list_cookies(params: { profile: string }, ctx: MethodContext) {
+    return { cookies: ctx.vault.list(params.profile) };
+  },
+
+  async vault_clear(params: { profile: string }, ctx: MethodContext) {
+    ctx.vault.clear(params.profile);
+    return { ok: true };
+  },
+
+  async vault_remove_cookie(
+    params: { profile: string; name: string; domain: string; path: string },
+    ctx: MethodContext
+  ) {
+    ctx.vault.remove(params.profile, { name: params.name, domain: params.domain, path: params.path });
     return { ok: true };
   },
 } as const;

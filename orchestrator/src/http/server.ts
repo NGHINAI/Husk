@@ -5,6 +5,7 @@ import { dispatch } from "./jsonrpc.js";
 import { JSONRPC_ERROR_CODES } from "./errors.js";
 import type { MethodContext } from "./methods.js";
 import type { SessionManager } from "../session/manager.js";
+import type { VaultStore } from "../vault/store.js";
 
 export interface HuskServerOptions {
   port: number;
@@ -12,6 +13,7 @@ export interface HuskServerOptions {
   sessions: SessionManager;
   /** Version surfaced via health responses. */
   version: string;
+  vault: VaultStore;
   /** Pino log level: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent". */
   logLevel?: string;
 }
@@ -33,7 +35,7 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   const log = pino({ level: opts.logLevel ?? "info", name: "husk-orchestrator" });
   const app = new Hono();
 
-  const ctx: MethodContext = { sessions: opts.sessions, version: opts.version };
+  const ctx: MethodContext = { sessions: opts.sessions, version: opts.version, vault: opts.vault };
 
   app.post("/v1/jsonrpc", async (c) => {
     let parsed: unknown;

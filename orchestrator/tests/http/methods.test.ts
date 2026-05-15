@@ -27,7 +27,7 @@ function buildCtx(): { ctx: MethodContext; mgr: SessionManager; created: Session
     return s;
   });
   return {
-    ctx: { sessions: mgr, version: "0.0.0-test" },
+    ctx: { sessions: mgr, version: "0.0.0-test", vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any },
     mgr,
     created,
   };
