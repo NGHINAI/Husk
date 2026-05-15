@@ -7,6 +7,7 @@ import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
+import { runExtract, type ExtractQuery } from "./extract.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
 import { VaultStore } from "../vault/store.js";
 import { captureCookies } from "../vault/capture.js";
@@ -361,6 +362,10 @@ export class Session {
     }
   }
 
+  async extract(query: ExtractQuery): Promise<string | null> {
+    return await runExtract(this.cdp, this.sessionId, query);
+  }
+
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
@@ -481,3 +486,4 @@ async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
 }
 
 export type { LoginInput, LoginResult } from "../auth/login-flow.js";
+export type { ExtractQuery } from "./extract.js";
