@@ -3,6 +3,7 @@ import type { Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { InvalidUrlError } from "./errors.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
+import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -238,6 +239,14 @@ export const METHODS = {
       reason: "invalid_login_params",
       message: "login requires either {profile, key} or {username, password}",
     };
+  },
+
+  async batch_visit(
+    params: BatchVisitParams,
+    ctx: MethodContext
+  ): Promise<{ results: BatchVisitItem[] }> {
+    const results = await batchVisit(ctx, params);
+    return { results };
   },
 } as const;
 
