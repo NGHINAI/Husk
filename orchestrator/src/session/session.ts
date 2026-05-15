@@ -11,6 +11,8 @@ import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/typ
 import { VaultStore } from "../vault/store.js";
 import { captureCookies } from "../vault/capture.js";
 import { restoreCookies } from "../vault/restore.js";
+import { performLogin, type LoginInput, type LoginResult } from "../auth/login-flow.js";
+import { totpCode } from "../auth/totp.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -209,6 +211,19 @@ export class Session {
     };
   }
 
+  async login(input: LoginInput & { totp_secret?: string }): Promise<LoginResult> {
+    const code = input.totp_code ?? (input.totp_secret ? totpCode(input.totp_secret) : undefined);
+    return await performLogin(
+      {
+        snapshot: () => this.snapshot(),
+        type: (id, text) => this.type(id, text),
+        click: (id) => this.click(id),
+        pressKey: (key) => this.press_key(key),
+      },
+      { username: input.username, password: input.password, totp_code: code }
+    );
+  }
+
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
@@ -324,3 +339,5 @@ async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
   }
   return null;
 }
+
+export type { LoginInput, LoginResult } from "../auth/login-flow.js";
