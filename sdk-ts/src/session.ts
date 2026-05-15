@@ -48,11 +48,21 @@ export class Session {
     await this.client.call("set_policy", { session_id: this.id, policy_yaml });
   }
 
-  async login(args: { profile: string; key: string }): Promise<LoginResult> {
+  /**
+   * Log into a website. Two modes:
+   *   A) Inline (ephemeral): `{ username, password, totp_secret? }` — creds
+   *      are not persisted; useful for one-off automation or chat-driven flows.
+   *   B) Stored lookup: `{ profile, key }` — reads previously-stored credentials
+   *      from the credentials vault.
+   */
+  async login(
+    args:
+      | { profile: string; key: string }
+      | { username: string; password: string; totp_secret?: string }
+  ): Promise<LoginResult> {
     return await this.client.call<LoginResult>("login", {
       session_id: this.id,
-      profile: args.profile,
-      key: args.key,
+      ...args,
     });
   }
 

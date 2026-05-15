@@ -94,4 +94,53 @@ describe("HTTP credentials methods", () => {
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("credential_not_found");
   });
+
+  it("login accepts inline {username, password} and never touches the credentials store", async () => {
+    const loginSpy = vi.fn(async () => ({ ok: true, url_before: "https://x", url_after: "https://x/dash" }));
+    const sm = new SessionManager(async () => ({
+      close: async () => {},
+      login: loginSpy,
+    }) as unknown as Session);
+    const ctx = { sessions: sm, version: "0.0.0", vault, credentials: creds };
+    const sid = await sm.create();
+    const r = await METHODS.login(
+      { session_id: sid, username: "inline-user", password: "inline-pass" },
+      ctx
+    );
+    expect((r as { ok: boolean }).ok).toBe(true);
+    expect(loginSpy).toHaveBeenCalledWith({
+      username: "inline-user",
+      password: "inline-pass",
+      totp_secret: undefined,
+    });
+    // Confirm the store was NOT consulted — no credentials should exist.
+    expect(creds.list("default")).toEqual([]);
+  });
+
+  it("login forwards inline totp_secret when supplied", async () => {
+    const loginSpy = vi.fn(async () => ({ ok: true, url_before: "a", url_after: "b" }));
+    const sm = new SessionManager(async () => ({
+      close: async () => {},
+      login: loginSpy,
+    }) as unknown as Session);
+    const ctx = { sessions: sm, version: "0.0.0", vault, credentials: creds };
+    const sid = await sm.create();
+    await METHODS.login(
+      { session_id: sid, username: "u", password: "p", totp_secret: "ABCD1234" },
+      ctx
+    );
+    expect(loginSpy).toHaveBeenCalledWith({
+      username: "u",
+      password: "p",
+      totp_secret: "ABCD1234",
+    });
+  });
+
+  it("login returns invalid_login_params when neither mode supplied", async () => {
+    const ctx = makeCtx(creds, vault);
+    const sid = await ctx.sessions.create();
+    const r = (await METHODS.login({ session_id: sid }, ctx)) as { ok: boolean; reason: string };
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("invalid_login_params");
+  });
 });

@@ -88,14 +88,44 @@ describe("login + credentials tools", () => {
     expect(names).toContain("husk_credentials_set");
   });
 
-  it("husk_login schema requires session_id, profile, key", () => {
+  it("husk_login schema requires only session_id (profile+key or username+password are optional alternates)", () => {
     const tool = TOOL_SURFACE.find((t) => t.name === "husk_login")!;
-    expect(tool.inputSchema.required).toEqual(expect.arrayContaining(["session_id", "profile", "key"]));
+    expect(tool.inputSchema.required).toEqual(["session_id"]);
+    // Both modes documented in properties
+    expect(tool.inputSchema.properties.profile).toBeDefined();
+    expect(tool.inputSchema.properties.key).toBeDefined();
+    expect(tool.inputSchema.properties.username).toBeDefined();
+    expect(tool.inputSchema.properties.password).toBeDefined();
+    expect(tool.inputSchema.properties.totp_secret).toBeDefined();
   });
 
-  it("handleToolCall routes husk_login to JSON-RPC login", async () => {
+  it("handleToolCall routes husk_login to JSON-RPC login (lookup mode)", async () => {
     const client = { call: vi.fn(async () => ({ ok: true, url_before: "a", url_after: "b" })) };
     await handleToolCall(client as any, "husk_login", { session_id: "s1", profile: "default", key: "github.com" });
     expect(client.call).toHaveBeenCalledWith("login", { session_id: "s1", profile: "default", key: "github.com" });
+  });
+
+  it("handleToolCall routes husk_login inline mode (username+password) without going through credentials_set", async () => {
+    const client = { call: vi.fn(async () => ({ ok: true, url_before: "a", url_after: "b" })) };
+    await handleToolCall(client as any, "husk_login", {
+      session_id: "s1",
+      username: "tomsmith",
+      password: "SuperSecretPassword!",
+    });
+    expect(client.call).toHaveBeenCalledWith("login", {
+      session_id: "s1",
+      username: "tomsmith",
+      password: "SuperSecretPassword!",
+    });
+  });
+
+  it("husk_type description warns agents to use husk_login for login forms", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_type")!;
+    expect(t.description.toLowerCase()).toMatch(/husk_login/);
+  });
+
+  it("husk_click description warns agents to use husk_login for form submission", () => {
+    const t = TOOL_SURFACE.find((x) => x.name === "husk_click")!;
+    expect(t.description.toLowerCase()).toMatch(/husk_login/);
   });
 });
