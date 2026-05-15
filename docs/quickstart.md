@@ -85,3 +85,51 @@ this is what your AI agent will consume in production.
 - [Full design spec](./superpowers/specs/2026-05-13-husk-design.md)
 - [Contributing guide](../CONTRIBUTING.md)
 - [M2 spike findings](./superpowers/spikes/2026-05-14-m2-lightpanda-audit/SPIKE-REPORT.md)
+
+## Run the HTTP server
+
+The `husk start` subcommand runs the orchestrator's JSON-RPC server on
+port 7777 (default) for use by non-CLI agents and SDK clients.
+
+```sh
+LIGHTPANDA_BIN=~/.husk/bin/lightpanda \
+  node ./orchestrator/dist/index.js start --port 7777
+```
+
+The server stays up until you send SIGINT (Ctrl-C). It accepts
+JSON-RPC 2.0 envelopes at POST `/v1/jsonrpc`. Six methods are available:
+
+- `health` — server liveness + active session count
+- `create_session` — start a lightpanda subprocess + open CDP, returns a `session_id`
+- `goto` — navigate the session to a URL
+- `snapshot` — return a spec-§5.2 JSON-LD snapshot
+- `snapshot_diff` — return diff vs prior snapshot, or `null` if no prior
+- `close_session` — tear down the session
+
+Example flow:
+
+```sh
+RPC=http://127.0.0.1:7777/v1/jsonrpc
+
+# 1. Create a session
+SID=$(curl -s -X POST $RPC -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"create_session"}' \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['result']['session_id'])")
+
+# 2. Navigate
+curl -s -X POST $RPC -H 'content-type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"goto\",\"params\":{\"session_id\":\"$SID\",\"url\":\"https://example.com/\"}}"
+
+# 3. Snapshot
+curl -s -X POST $RPC -H 'content-type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"snapshot\",\"params\":{\"session_id\":\"$SID\"}}" \
+  | head -40
+
+# 4. Close
+curl -s -X POST $RPC -H 'content-type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"close_session\",\"params\":{\"session_id\":\"$SID\"}}"
+```
+
+The full OpenAPI spec is at
+[`protocol/jsonrpc.openapi.yaml`](../protocol/jsonrpc.openapi.yaml).
+SDKs in M6 will be generated against this spec.
