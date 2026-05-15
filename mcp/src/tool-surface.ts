@@ -152,12 +152,22 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["profile", "key", "username", "password"],
     },
   },
+  {
+    name: "husk_snapshot_diff",
+    description: "Husk — Return the {added, removed, changed} diff against the previous snapshot in this session. Much cheaper than husk_snapshot when you just need to know what changed after an action. Returns null on the first call (no prior snapshot to compare against).",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: { type: "string" } },
+      required: ["session_id"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
   husk_create_session: "create_session",
   husk_goto: "goto",
   husk_snapshot: "snapshot",
+  husk_snapshot_diff: "snapshot_diff",
   husk_click: "click",
   husk_type: "type",
   husk_scroll: "scroll",

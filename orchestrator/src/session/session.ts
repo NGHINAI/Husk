@@ -47,7 +47,7 @@ export interface SessionOptions {
  *      or `null` if there is no prior. The current snapshot becomes the new baseline.
  *   5. `session.close()` — disconnects and kills the subprocess.
  */
-export type ActionResult = { ok: true; warnings: Warning[] } | RejectionEnvelope;
+export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
 
 export class Session {
   private lastSnapshotAt = 0;
@@ -176,12 +176,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "click", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -202,12 +203,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "type", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -218,12 +220,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "scroll", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -234,12 +237,13 @@ export class Session {
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
     await waitForMutationWindow();
-    const after = await this.snapshot();
+    const after = await this.snapshot({ force: true });
     return {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "press_key", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
+      diff: diffSnapshots(before, after),
     };
   }
 
@@ -423,12 +427,11 @@ export interface SessionInjected {
   fromInjected: (i: SessionInjected) => Session;
 }).fromInjected = (i: SessionInjected): Session => {
   const fakeCdp = { ...i.cdp, close: i.cdp.close ?? (async () => {}) };
-  // Build a minimal watchdog-like object that satisfies Watchdog's interface
-  const fakeWatchdog = {
-    evaluatePre: () => ({ ok: true as const, backendNodeId: null }),
-    evaluatePost: () => [],
-    setPolicy: () => {},
-  } as unknown as Watchdog;
+  // Use a real Watchdog so that evaluatePre can resolve backendNodeId via the
+  // snapshot's _resolver (populated by transformAxTree). Tests that need DOM
+  // interactions (click, type) will work correctly as long as the CDP mock
+  // returns a valid DOM.getBoxModel response.
+  const fakeWatchdog = new Watchdog();
 
   return new (Session as unknown as new (
     engine: unknown,

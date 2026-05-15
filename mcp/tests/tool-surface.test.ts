@@ -129,3 +129,15 @@ describe("login + credentials tools", () => {
     expect(t.description.toLowerCase()).toMatch(/husk_login/);
   });
 });
+
+describe("snapshot_diff tool", () => {
+  it("husk_snapshot_diff is registered", () => {
+    expect(TOOL_SURFACE.find((t) => t.name === "husk_snapshot_diff")).toBeDefined();
+  });
+
+  it("handleToolCall routes husk_snapshot_diff to snapshot_diff", async () => {
+    const client = { call: vi.fn(async () => ({ added: [], removed: [], changed: [] })) };
+    await handleToolCall(client as any, "husk_snapshot_diff", { session_id: "s1" });
+    expect(client.call).toHaveBeenCalledWith("snapshot_diff", { session_id: "s1" });
+  });
+});
