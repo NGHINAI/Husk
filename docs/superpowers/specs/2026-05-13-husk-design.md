@@ -515,6 +515,24 @@ Builds on M8a's cookie vault. Adds credential storage and automated login.
 - Account creation, password reset — login only.
 - JS fallback ungated by watchdog (see caveat above).
 
+### 5.6 Inherent Parallelism + Diff-by-Default (M9 — shipped 2026-05-15)
+
+The agent never names a concurrency knob. The engine handles it.
+
+**Engine pool.** At orchestrator startup, K=4 lightpanda processes are pre-spawned (configurable via `HUSK_POOL_MIN_WARM`). Under concurrent demand, the pool elastically scales up to `MAX_PARALLEL`, defaulting to `min(50, free_memory_MB / 30)` (one lightpanda ≈ 30MB resident). After 30s of idle, the pool shrinks back to K. `acquire()` waits when at capacity rather than failing.
+
+**Eager snapshot in goto.** `Session.goto(url)` performs the navigation AND captures the AX-tree snapshot, caching it as `lastSnapshot`. The agent's next `husk_snapshot` call is a memory hit (<5ms), not a CDP round-trip.
+
+**Snapshot freshness.** `Session.snapshot({maxAgeMs})` returns `lastSnapshot` if captured within the window (default 500ms). Pass `maxAgeMs: 0` (or `force: true` server-side) to force re-capture.
+
+**Diff-by-default.** Every action method (`click`/`type`/`scroll`/`press_key`) returns its result with a `diff: {added, removed, changed}` field comparing the post-action snapshot against the pre-action one. Saves ~5KB per response vs returning a full new snapshot. Watchdog rejections do NOT include `diff` (the action never happened).
+
+**On-demand diff.** `husk_snapshot_diff(session_id)` returns the diff between the current page state and the previous snapshot tracked in the session. Cheap "what changed" call for agent loops that need to react to async page updates.
+
+**Why no batch tool.** Claude's native parallel tool use means N concurrent `husk_*` calls in a single turn fan out automatically through the pool. The architectural premise is "primitives the agent already knows + an engine that's parallel by construction" — not "a special batch method the agent must remember to use." Same simplicity as map-reduce being parallel without an explicit `map_parallel` primitive — the runtime does it.
+
+**Performance contract (measured 2026-05-15):** 50-URL concurrent workflow — 3.9 seconds wall clock; per-URL avg 2.67s including 1.5s `goto` settle; throughput 12.8 URLs/sec. Pool warmup ~120ms. See `orchestrator/bench/parallel-bench.ts`.
+
 ---
 
 ## 6. Developer Experience — How Agents Access Husk
