@@ -3,6 +3,9 @@ import { getVersion } from "./version.js";
 import { Session } from "./session/session.js";
 import { SessionManager } from "./session/manager.js";
 import { createHuskServer } from "./http/server.js";
+import { homedir } from "node:os";
+import { join as pathJoin } from "node:path";
+import { SiteGraphCache } from "./cache/site-graph.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -97,7 +100,14 @@ async function runServer(args: StartArgs): Promise<void> {
   // the lightpanda binary. If the binary is missing the first create_session
   // call will reject with a structured BinaryNotFoundError; the server stays
   // up so callers see the error rather than a connection refusal.
-  const sessions = new SessionManager(() => Session.create({ log: (l) => process.stderr.write(l + "\n") }));
+  const cacheDir = process.env.HUSK_CACHE_DIR ?? pathJoin(homedir(), ".husk", "site-graph");
+  const siteGraph = new SiteGraphCache({ cacheDir });
+  const sessions = new SessionManager(() =>
+    Session.create({
+      log: (l) => process.stderr.write(l + "\n"),
+      siteGraph,
+    })
+  );
 
   const server = await createHuskServer({
     port: args.port,
@@ -111,6 +121,7 @@ async function runServer(args: StartArgs): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     server.log.info({ signal }, "husk: shutting down");
     await sessions.closeAll();
+    siteGraph.close();
     await server.stop();
     process.exit(0);
   };
