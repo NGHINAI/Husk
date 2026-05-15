@@ -44,7 +44,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element by stable_id. Watchdog-protected: returns a rejection envelope with candidates if the element doesn't exist or fails sanity checks.",
+    description: "Husk — Click an element by stable_id. Watchdog-protected: returns a rejection envelope with candidates if the element doesn't exist or fails sanity checks. NOTE: For submitting login forms, use `husk_login` instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +56,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_type",
-    description: "Husk — Type into an element by stable_id. Watchdog-protected.",
+    description: "Husk — Type into a text field by stable_id. Watchdog-protected. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead — it handles the engine quirks and submits the form correctly.",
     inputSchema: {
       type: "object",
       properties: {
@@ -123,15 +123,18 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_login",
-    description: "Husk — Log into a website using stored credentials. Reads username/password (and optional TOTP secret) from the credentials store for the given profile + key. Returns { ok, url_before, url_after } on success or { ok: false, reason } on failure.",
+    description: "Husk — Log into a website. THIS IS THE TOOL TO USE FOR ANY LOGIN FORM. It locates username/password/submit fields, fills them, submits the form, and verifies. Two modes: (A) inline — pass {username, password, totp_secret?} directly (ephemeral, not stored); (B) lookup — pass {profile, key} to read previously-stored credentials. Use mode A when the user gives you credentials in chat; mode B when reusing saved ones. Returns { ok, url_before, url_after } on success or { ok: false, reason } on failure. Prefer this over husk_type/husk_click for login flows — those fail on password fields with the bundled engine.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        profile: { type: "string", description: "Credential profile name" },
-        key: { type: "string", description: "Credential key (typically a hostname)" },
+        username: { type: "string", description: "Mode A: inline username (won't be stored)" },
+        password: { type: "string", description: "Mode A: inline password (won't be stored)" },
+        totp_secret: { type: "string", description: "Mode A: optional base32 TOTP secret for 2FA" },
+        profile: { type: "string", description: "Mode B: credential profile name (used with `key`)" },
+        key: { type: "string", description: "Mode B: credential key, typically a hostname (used with `profile`)" },
       },
-      required: ["session_id", "profile", "key"],
+      required: ["session_id"],
     },
   },
   {

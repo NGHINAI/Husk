@@ -187,19 +187,48 @@ export const METHODS = {
   },
 
   async login(
-    params: { session_id: string; profile: string; key: string },
+    params: {
+      session_id: string;
+      // Mode A — look up stored credential
+      profile?: string;
+      key?: string;
+      // Mode B — inline (ephemeral; not persisted)
+      username?: string;
+      password?: string;
+      totp_secret?: string;
+    },
     ctx: MethodContext
   ) {
-    const cred = ctx.credentials.get(params.profile, params.key);
-    if (!cred) {
-      return { ok: false, reason: "credential_not_found", key: params.key };
-    }
     const session = ctx.sessions.get(params.session_id);
-    return await session.login({
-      username: cred.username,
-      password: cred.password,
-      totp_secret: cred.totp_secret,
-    });
+
+    // Mode B: inline credentials supplied → use them directly, never touch the store.
+    if (params.username !== undefined && params.password !== undefined) {
+      return await session.login({
+        username: params.username,
+        password: params.password,
+        totp_secret: params.totp_secret,
+      });
+    }
+
+    // Mode A: profile+key lookup from the credentials store.
+    if (params.profile && params.key) {
+      const cred = ctx.credentials.get(params.profile, params.key);
+      if (!cred) {
+        return { ok: false, reason: "credential_not_found", key: params.key };
+      }
+      return await session.login({
+        username: cred.username,
+        password: cred.password,
+        totp_secret: cred.totp_secret,
+      });
+    }
+
+    // Neither mode supplied — caller error.
+    return {
+      ok: false,
+      reason: "invalid_login_params",
+      message: "login requires either {profile, key} or {username, password}",
+    };
   },
 } as const;
 

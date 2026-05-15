@@ -50,12 +50,37 @@ class Session:
     async def set_policy(self, policy_yaml: Optional[str]) -> None:
         await self._client.call("set_policy", {"session_id": self._id, "policy_yaml": policy_yaml})
 
-    async def login(self, *, profile: str, key: str) -> dict[str, Any]:
-        return await self._client.call("login", {
-            "session_id": self._id,
-            "profile": profile,
-            "key": key,
-        })
+    async def login(
+        self,
+        *,
+        profile: Optional[str] = None,
+        key: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        totp_secret: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Log into a website. Two modes:
+
+        - Inline (ephemeral): pass ``username`` + ``password`` (and optional
+          ``totp_secret``) directly. Credentials are not persisted.
+        - Stored lookup: pass ``profile`` + ``key`` to read previously-stored
+          credentials from the credentials vault.
+        """
+        params: dict[str, Any] = {"session_id": self._id}
+        if username is not None and password is not None:
+            params["username"] = username
+            params["password"] = password
+            if totp_secret is not None:
+                params["totp_secret"] = totp_secret
+        elif profile is not None and key is not None:
+            params["profile"] = profile
+            params["key"] = key
+        else:
+            raise ValueError(
+                "Session.login requires either (username, password) "
+                "or (profile, key)"
+            )
+        return await self._client.call("login", params)
 
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})
