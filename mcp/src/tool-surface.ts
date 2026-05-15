@@ -13,8 +13,13 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns { session_id }. Always call this first.",
-    inputSchema: { type: "object", properties: {} },
+    description: "Husk — Create a new browser session. Returns { session_id }. Pass `profile` to bind the session to a named cookie vault (cookies persist across sessions).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: { type: "string", description: "Optional profile name to restore cookies from" },
+      },
+    },
   },
   {
     name: "husk_goto",
@@ -98,6 +103,20 @@ export const TOOL_SURFACE: ToolSpec[] = [
     },
   },
   {
+    name: "husk_vault_list_profiles",
+    description: "Husk — List all named profiles in the cookie vault.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "husk_vault_clear",
+    description: "Husk — Clear every cookie stored for a profile.",
+    inputSchema: {
+      type: "object",
+      properties: { profile: { type: "string" } },
+      required: ["profile"],
+    },
+  },
+  {
     name: "husk_version",
     description: "Husk — Return Husk MCP server version info.",
     inputSchema: { type: "object", properties: {} },
@@ -113,6 +132,8 @@ const RPC_MAP: Record<string, string> = {
   husk_scroll: "scroll",
   husk_press_key: "press_key",
   husk_close_session: "close_session",
+  husk_vault_list_profiles: "vault_list_profiles",
+  husk_vault_clear: "vault_clear",
 };
 
 const VERSION = "0.0.0";
