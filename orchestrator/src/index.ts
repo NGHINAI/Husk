@@ -176,6 +176,31 @@ async function runServer(args: StartArgs): Promise<void> {
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
+  // Parent-death watchdog. When the orchestrator is spawned as a child of
+  // another process (e.g. the husk-mcp server), Claude Desktop sometimes
+  // SIGKILLs the MCP without giving it a chance to clean up. In that case
+  // signal handlers never run and we'd leak a long-lived orchestrator + a
+  // lightpanda subprocess.
+  //
+  // Strategy: record the parent PID at startup; if it ever changes (the
+  // process got reparented to init/launchd after the original parent died)
+  // OR if the parent stops existing, shut down. Cost: one syscall/sec.
+  const startupParent = process.ppid;
+  if (startupParent && startupParent > 1) {
+    const interval = setInterval(() => {
+      const currentParent = process.ppid;
+      if (currentParent === 1 || currentParent !== startupParent) {
+        clearInterval(interval);
+        server.log.info(
+          { startupParent, currentParent },
+          "husk: parent died, shutting down"
+        );
+        void shutdown("SIGTERM");
+      }
+    }, 1000);
+    interval.unref();
+  }
 }
 
 async function runLogin(rest: string[]): Promise<void> {
