@@ -116,10 +116,11 @@ async function runServer(args: StartArgs): Promise<void> {
     defaultPolicy = parsePolicy(yaml);
   }
 
-  const sessions = new SessionManager(async () => {
+  const sessions = new SessionManager(async (opts) => {
     const session = await Session.create({
       log: (l) => process.stderr.write(l + "\n"),
       siteGraph,
+      profile: opts?.profile,
     });
     if (defaultPolicy) session.setPolicy(defaultPolicy);
     return session;
