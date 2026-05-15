@@ -65,6 +65,14 @@ export interface Snapshot {
   count: number;
   /** Root of the snapshot tree. */
   root: SnapshotNode;
+  /**
+   * Internal-only side-channel: stable_id → backend DOM node id (CDP DOM.NodeId).
+   * Populated by `transformAxTree`. The HTTP layer strips it before responses
+   * are returned to agents. Used by Session.click/Session.type/etc. to resolve
+   * a stable_id to a clickable bounding box. Optional because deserialized
+   * snapshots (e.g. from disk in tests) lack it.
+   */
+  _resolver?: import("./resolver.js").SelectorResolver;
 }
 
 // ----- Diff types for mutation poller (Task 7) -----

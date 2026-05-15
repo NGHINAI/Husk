@@ -1,6 +1,7 @@
 import type { AXNode, AXNodeProperty, Snapshot, SnapshotNode, SnapshotStateFlag } from "./types.js";
 import { isPassthroughRole } from "./passthrough-roles.js";
 import { stableId } from "./stable-id.js";
+import { SelectorResolver } from "./resolver.js";
 
 /**
  * Transform an `Accessibility.getFullAXTree` response into a spec-§5.2
@@ -28,6 +29,7 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
   if (!root) throw new Error(`transformAxTree: root id "${rootId}" not present in nodes`);
 
   let count = 0;
+  const resolver = new SelectorResolver();
   const visit = (node: AXNode, parentXpath: string, indexInParent: number): SnapshotNode | SnapshotNode[] => {
     const role = node.role?.value ?? "generic";
     // Walk through (don't emit) both: passthrough-role nodes AND `ignored: true`
@@ -53,6 +55,11 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
     const flags = computeStateFlags(role, node.properties);
 
     const out: SnapshotNode = { i: id, r: role, n: name, s: flags };
+
+    // Populate resolver: map stable_id → backendDOMNodeId for emitted nodes only.
+    if (node.backendDOMNodeId != null) {
+      resolver.set(id, node.backendDOMNodeId);
+    }
 
     const children: SnapshotNode[] = [];
     let childIdx = 0;
@@ -80,7 +87,7 @@ export function transformAxTree(nodes: AXNode[], rootId: string, url: string): S
   if (Array.isArray(result)) {
     throw new Error("transformAxTree: root resolved to passthrough nodes only");
   }
-  return { v: 1, url, count, root: result };
+  return { v: 1, url, count, root: result, _resolver: resolver };
 }
 
 function computeStateFlags(
