@@ -4,6 +4,7 @@ import { Session } from "./session/session.js";
 import { SessionManager } from "./session/manager.js";
 import { createHuskServer } from "./http/server.js";
 import { VaultStore } from "./vault/store.js";
+import { CredentialsStore } from "./credentials/store.js";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -120,6 +121,12 @@ async function runServer(args: StartArgs): Promise<void> {
     encryptionKey: process.env.HUSK_VAULT_KEY,
   });
 
+  const credentialsDir = process.env.HUSK_CREDENTIALS_DIR ?? pathJoin(homedir(), ".husk", "credentials");
+  const credentials = new CredentialsStore({
+    credentialsDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+
   // Load policy YAML once at startup if --policy was passed.
   let defaultPolicy: PolicyDocument | null = null;
   if (args.policy) {
@@ -146,6 +153,7 @@ async function runServer(args: StartArgs): Promise<void> {
     version: getVersion(),
     logLevel: args.logLevel,
     vault,
+    credentials,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM
@@ -154,6 +162,7 @@ async function runServer(args: StartArgs): Promise<void> {
     await sessions.closeAll();
     siteGraph.close();
     vault.close();
+    credentials.close();
     await server.stop();
     process.exit(0);
   };

@@ -13,7 +13,7 @@ function makeCtx(vault: VaultStore) {
     captured = opts;
     return { close: async () => {} } as Session;
   });
-  return { ctx: { sessions: sm, version: "0.0.0", vault }, getProfileArg: () => captured };
+  return { ctx: { sessions: sm, version: "0.0.0", vault, credentials: { listProfiles: () => [], list: () => [], get: () => null, set: () => {}, remove: () => {}, close: () => {} } as any }, getProfileArg: () => captured };
 }
 
 describe("HTTP vault methods", () => {
