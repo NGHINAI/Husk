@@ -100,9 +100,23 @@ export class Session {
     // Crude wait — sufficient for v0. M5 will hook Page.loadEventFired.
     // Bumped from 1000ms to 1500ms to match the M2 spike PoC's working timing.
     await new Promise((r) => setTimeout(r, 1500));
+    // Eager snapshot: cache lastSnapshot so the agent's next snapshot() call is instant.
+    // Use force:true so navigation always fetches a fresh AX tree (not a stale cache).
+    // Best-effort: don't fail goto if AX capture has a transient issue.
+    try {
+      await this.snapshot({ force: true });
+    } catch {
+      // best-effort
+    }
   }
 
-  async snapshot(): Promise<Snapshot> {
+  async snapshot(opts?: { force?: boolean }): Promise<Snapshot> {
+    // Return cached snapshot when available and force-refresh is not requested.
+    // T3 will replace this with a time-based freshness window; for now any
+    // cached value is considered fresh until the next navigation or forced fetch.
+    if (this.lastSnapshot && !opts?.force) {
+      return this.lastSnapshot;
+    }
     const tree = (await this.cdp.send(
       "Accessibility.getFullAXTree",
       {},
