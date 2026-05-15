@@ -1,14 +1,56 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://husk.dev/schemas/policy.schema.json",
-  "title": "Husk Watchdog Policy",
-  "description": "Per-session watchdog policy rules. Milestone 1 stub; full schema defined in Milestone 5.",
+  "$id": "https://husk.dev/protocol/policy.schema.json",
+  "title": "Husk Policy",
+  "description": "Declarative watchdog policy. See spec §5.3 Layer 2.",
   "type": "object",
-  "required": ["flow"],
+  "additionalProperties": false,
   "properties": {
-    "flow": { "type": "string" },
-    "forbidden": { "type": "array" },
-    "required_before": { "type": "array" },
+    "flow": { "type": "string", "description": "Freeform identifier — flows it's associated with." },
+    "forbidden": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "role": { "type": "string" },
+          "name_matches": { "type": "string", "description": "JS-style regex source." },
+          "selector": { "type": "string", "description": "CSS selector matched against SiteGraphRow.current_css (v0.1+)." },
+          "on": { "type": "string", "enum": ["click", "type", "scroll", "press_key", "submit_form"] },
+          "severity": { "type": "string", "enum": ["hard", "warn"] },
+          "message": { "type": "string" }
+        },
+        "required": ["severity"],
+        "oneOf": [
+          { "required": ["selector"] },
+          { "required": ["role", "name_matches"] }
+        ]
+      }
+    },
+    "required_before": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "type": "string", "enum": ["click", "type", "scroll", "press_key", "submit_form"] },
+          "prereq": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "role": { "type": "string" },
+                "name_matches": { "type": "string" },
+                "state": { "type": "string", "enum": ["checked", "enabled", "visible", "focused", "disabled"] }
+              },
+              "required": ["role", "name_matches", "state"]
+            }
+          }
+        },
+        "required": ["action", "prereq"]
+      }
+    },
     "allow_domains": { "type": "array", "items": { "type": "string" } },
     "deny_domains": { "type": "array", "items": { "type": "string" } }
   }
