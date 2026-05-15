@@ -3,6 +3,7 @@ import type {
   ActionResult,
   Snapshot,
   SnapshotDiff,
+  LoginResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -45,6 +46,14 @@ export class Session {
 
   async setPolicy(policy_yaml: string | null): Promise<void> {
     await this.client.call("set_policy", { session_id: this.id, policy_yaml });
+  }
+
+  async login(args: { profile: string; key: string }): Promise<LoginResult> {
+    return await this.client.call<LoginResult>("login", {
+      session_id: this.id,
+      profile: args.profile,
+      key: args.key,
+    });
   }
 
   async close(): Promise<void> {
