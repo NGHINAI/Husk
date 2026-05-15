@@ -78,6 +78,53 @@ integrationOrSkip("vault e2e — login round-trip", () => {
     }
   }, 60_000);
 
+  it("session cookies (expires=-1) round-trip across sessions — regression for restore.ts bug", async () => {
+    // Regression test for a bug found during M8b live testing: when a cookie
+    // is captured from a real Set-Cookie response (no Max-Age/Expires header
+    // = session cookie), it gets stored with expires=-1, session=true. The
+    // original restore code passed expires=-1 to Network.setCookies, which
+    // lightpanda interpreted as "expired in 1969" and silently dropped.
+    // Fix in restore.ts: omit `expires` for session cookies.
+    const vaultDir = mkdtempSync(join(tmpdir(), "husk-vault-session-cookie-"));
+    const vault = new VaultStore({ vaultDir });
+    const fixture = await startLoginFixture();
+
+    try {
+      // Pre-seed vault as if a real Set-Cookie session response was captured.
+      vault.put("demo", [{
+        name: "husk_demo_session",
+        value: "valid",
+        domain: "127.0.0.1",
+        path: "/",
+        expires: -1,  // SESSION COOKIE
+        size: 22,
+        httpOnly: true,
+        secure: false,
+        session: true,  // <-- the field that broke things
+        sameSite: "Lax",
+      }]);
+
+      let s: Session | undefined;
+      try {
+        s = await Session.create({
+          readinessTimeoutMs: 15_000,
+          vault,
+          profile: "demo",
+        });
+        await s.goto(`${fixture.url}/protected`);
+        const snap = await s.snapshot();
+        // The fix: session cookie should restore and authenticate the request.
+        expect(JSON.stringify(snap).includes("Welcome back")).toBe(true);
+      } finally {
+        await s?.close();
+      }
+    } finally {
+      await fixture.close();
+      vault.close();
+      rmSync(vaultDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("a session without profile gets a clean cookie jar (no restoration)", async () => {
     const vaultDir = mkdtempSync(join(tmpdir(), "husk-vault-no-restore-"));
     const vault = new VaultStore({ vaultDir });
