@@ -1,106 +1,91 @@
-import { createInterface } from "node:readline";
-import type { Readable, Writable } from "node:stream";
-import {
-  isToolsListResponse,
-  isToolsCallRequest,
-  rewriteToolsListResponse,
-  rewriteToolsCallRequest,
-} from "./transform.js";
-import { isHuskNativeTool, callHuskNativeTool, type HuskNativeContext } from "./husk-tools.js";
-import type { JsonRpcMessage, JsonRpcSuccessResponse } from "./types.js";
-
-export interface ProxyOptions {
-  /** Version string for the upstream lightpanda binary. Surfaced via husk_version. */
-  lightpandaVersion: string;
-  /** Optional logger for proxy-level events (errors, malformed input). Defaults to no-op. */
-  log?: (line: string) => void;
-}
+import { TOOL_SURFACE, handleToolCall } from "./tool-surface.js";
+import type { HuskRpcClient } from "./client.js";
 
 /**
- * Run the Husk MCP proxy.
+ * Minimal MCP protocol handler.
  *
- * Pipes JSON-RPC newline-delimited messages between an "agent" pair of
- * streams (the MCP client) and an "upstream" pair (the lightpanda mcp
- * subprocess), applying our transformations:
+ * Speaks newline-delimited JSON-RPC 2.0 over stdin/stdout. Implements:
+ *   - initialize         → returns server info
+ *   - tools/list         → returns TOOL_SURFACE
+ *   - tools/call         → routes to handleToolCall
+ *   - notifications/*    → silently ignored
  *
- *   - tools/call requests with husk_* names → translated to upstream
- *   - tools/call requests with husk_version → handled locally
- *   - tools/list responses → rebranded with husk_* names + Husk-native tools appended
- *   - Everything else → pass-through
- *
- * Resolves when the agent input stream ends (EOF).
+ * v0 only — no resources, prompts, or completions. Add as needed.
  */
-export async function runProxy(
-  agentIn: Readable,
-  agentOut: Writable,
-  upstreamIn: Writable,
-  upstreamOut: Readable,
-  opts: ProxyOptions
+export async function runMcpStdio(
+  client: HuskRpcClient,
+  options: { stdin?: NodeJS.ReadableStream; stdout?: NodeJS.WritableStream } = {}
 ): Promise<void> {
-  const log = opts.log ?? (() => {});
-  const ctx: HuskNativeContext = { lightpandaVersion: opts.lightpandaVersion };
+  const stdin = options.stdin ?? process.stdin;
+  const stdout = options.stdout ?? process.stdout;
+  let buffer = "";
 
-  // --- Agent → Upstream (or local) ---
-  const agentRl = createInterface({ input: agentIn, crlfDelay: Infinity });
-  const agentDone = new Promise<void>((resolve) => {
-    agentRl.on("close", () => resolve());
-  });
+  const send = (msg: unknown): void => {
+    stdout.write(JSON.stringify(msg) + "\n");
+  };
 
-  agentRl.on("line", (line) => {
-    if (!line.trim()) return;
-    let msg: JsonRpcMessage;
+  const handle = async (req: { id?: unknown; method?: string; params?: Record<string, unknown> }) => {
+    if (req.id === undefined) return; // notification — no response
     try {
-      msg = JSON.parse(line) as JsonRpcMessage;
-    } catch (err) {
-      log(`[husk-mcp] malformed agent message: ${(err as Error).message}`);
-      return;
-    }
-
-    if (isToolsCallRequest(msg) && isHuskNativeTool(msg.params.name)) {
-      // Husk-native tool: handle locally, never forward upstream.
-      void callHuskNativeTool(msg.params.name, msg.params.arguments, ctx).then((result) => {
-        const response: JsonRpcSuccessResponse = {
-          jsonrpc: "2.0",
-          id: msg.id,
-          result,
-        };
-        agentOut.write(JSON.stringify(response) + "\n");
+      switch (req.method) {
+        case "initialize":
+          send({
+            jsonrpc: "2.0",
+            id: req.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: { tools: {} },
+              serverInfo: { name: "husk-mcp", version: "0.0.0" },
+            },
+          });
+          break;
+        case "tools/list":
+          send({ jsonrpc: "2.0", id: req.id, result: { tools: TOOL_SURFACE } });
+          break;
+        case "tools/call": {
+          const { name, arguments: args } = (req.params ?? {}) as {
+            name: string; arguments: Record<string, unknown>;
+          };
+          const result = await handleToolCall(client, name, args ?? {});
+          send({
+            jsonrpc: "2.0",
+            id: req.id,
+            result: {
+              content: [{ type: "text", text: JSON.stringify(result) }],
+            },
+          });
+          break;
+        }
+        default:
+          send({
+            jsonrpc: "2.0", id: req.id,
+            error: { code: -32601, message: `Method not found: ${req.method}` },
+          });
+      }
+    } catch (e) {
+      send({
+        jsonrpc: "2.0", id: req.id,
+        error: { code: -32603, message: (e as Error).message },
       });
-      return;
     }
+  };
 
-    if (isToolsCallRequest(msg)) {
-      // Translate husk_* → upstream name, then forward.
-      const rewritten = rewriteToolsCallRequest(msg);
-      upstreamIn.write(JSON.stringify(rewritten) + "\n");
-      return;
+  stdin.setEncoding("utf8");
+  stdin.on("data", (chunk: string) => {
+    buffer += chunk;
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        void handle(msg);
+      } catch {
+        // Drop malformed lines silently per MCP convention
+      }
     }
-
-    // Default: forward unchanged.
-    upstreamIn.write(line + "\n");
   });
 
-  // --- Upstream → Agent ---
-  const upstreamRl = createInterface({ input: upstreamOut, crlfDelay: Infinity });
-  upstreamRl.on("line", (line) => {
-    if (!line.trim()) return;
-    let msg: JsonRpcMessage;
-    try {
-      msg = JSON.parse(line) as JsonRpcMessage;
-    } catch (err) {
-      log(`[husk-mcp] malformed upstream message: ${(err as Error).message}`);
-      return;
-    }
-
-    if (isToolsListResponse(msg)) {
-      const rewritten = rewriteToolsListResponse(msg);
-      agentOut.write(JSON.stringify(rewritten) + "\n");
-      return;
-    }
-
-    // Default: forward unchanged.
-    agentOut.write(line + "\n");
-  });
-
-  await agentDone;
+  await new Promise<void>((resolve) => stdin.on("end", () => resolve()));
 }
