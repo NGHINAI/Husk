@@ -142,3 +142,21 @@ export interface JsonRpcErrorResponse {
 }
 
 export type JsonRpcResponse<T = unknown> = JsonRpcSuccessResponse<T> | JsonRpcErrorResponse;
+
+export interface Credential {
+  key: string;
+  username: string;
+  password: string;
+  totp_secret?: string;
+}
+
+export type LoginReason =
+  | "login_form_not_found"
+  | "login_did_not_advance"
+  | "watchdog_rejected"
+  | "totp_field_not_found"
+  | "credential_not_found";
+
+export type LoginResult =
+  | { ok: true; url_before: string; url_after: string }
+  | { ok: false; reason: LoginReason; key?: string; detail?: unknown };

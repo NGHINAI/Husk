@@ -55,15 +55,47 @@ class VaultApi {
 
 export { VaultApi };
 
+class CredentialsApi {
+  constructor(private readonly client: JsonRpcClient) {}
+
+  async set(profile: string, cred: { key: string; username: string; password: string; totp_secret?: string }): Promise<void> {
+    await this.client.call("credentials_set", {
+      profile,
+      key: cred.key,
+      username: cred.username,
+      password: cred.password,
+      totp_secret: cred.totp_secret,
+    });
+  }
+
+  async list(profile: string): Promise<Array<{ key: string; username: string }>> {
+    const r = await this.client.call<{ credentials: Array<{ key: string; username: string }> }>("credentials_list", { profile });
+    return r.credentials;
+  }
+
+  async listProfiles(): Promise<string[]> {
+    const r = await this.client.call<{ profiles: string[] }>("credentials_list_profiles", {});
+    return r.profiles;
+  }
+
+  async remove(profile: string, key: string): Promise<void> {
+    await this.client.call("credentials_remove", { profile, key });
+  }
+}
+
+export { CredentialsApi };
+
 export class Husk {
   public readonly baseUrl: string;
   public readonly vault: VaultApi;
+  public readonly credentials: CredentialsApi;
   private readonly client: JsonRpcClient;
 
   constructor(options: HuskOptions = {}) {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.client = new JsonRpcClient({ baseUrl: this.baseUrl, fetch: options.fetch });
     this.vault = new VaultApi(this.client);
+    this.credentials = new CredentialsApi(this.client);
   }
 
   async createSession(options: { profile?: string } = {}): Promise<Session> {

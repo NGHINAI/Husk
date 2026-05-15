@@ -2,6 +2,7 @@ import type { SessionManager } from "../session/manager.js";
 import type { Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { InvalidUrlError } from "./errors.js";
 import type { VaultStore } from "../vault/store.js";
+import type { CredentialsStore } from "../credentials/store.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -9,6 +10,7 @@ export interface MethodContext {
   /** Husk version string (mirrored from package.json / orchestrator/src/version.ts). */
   version: string;
   vault: VaultStore;
+  credentials: CredentialsStore;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -156,6 +158,48 @@ export const METHODS = {
   ) {
     ctx.vault.remove(params.profile, { name: params.name, domain: params.domain, path: params.path });
     return { ok: true };
+  },
+
+  async credentials_set(
+    params: { profile: string; key: string; username: string; password: string; totp_secret?: string },
+    ctx: MethodContext
+  ) {
+    ctx.credentials.set(params.profile, {
+      key: params.key,
+      username: params.username,
+      password: params.password,
+      totp_secret: params.totp_secret,
+    });
+    return { ok: true };
+  },
+
+  async credentials_remove(params: { profile: string; key: string }, ctx: MethodContext) {
+    ctx.credentials.remove(params.profile, params.key);
+    return { ok: true };
+  },
+
+  async credentials_list(params: { profile: string }, ctx: MethodContext) {
+    return { credentials: ctx.credentials.list(params.profile) };
+  },
+
+  async credentials_list_profiles(_params: unknown, ctx: MethodContext) {
+    return { profiles: ctx.credentials.listProfiles() };
+  },
+
+  async login(
+    params: { session_id: string; profile: string; key: string },
+    ctx: MethodContext
+  ) {
+    const cred = ctx.credentials.get(params.profile, params.key);
+    if (!cred) {
+      return { ok: false, reason: "credential_not_found", key: params.key };
+    }
+    const session = ctx.sessions.get(params.session_id);
+    return await session.login({
+      username: cred.username,
+      password: cred.password,
+      totp_secret: cred.totp_secret,
+    });
   },
 } as const;
 

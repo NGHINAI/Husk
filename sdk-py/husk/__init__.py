@@ -22,6 +22,7 @@ from ._types import (
     parse_cookie,
     parse_snapshot,
 )
+from ._credentials import CredentialsApi
 from ._vault import VaultApi
 
 
@@ -47,6 +48,7 @@ class Husk:
         self.base_url = base_url
         self._client = JsonRpcClient(base_url=base_url, http_client=_http_client)
         self.vault = VaultApi(self._client)
+        self.credentials = CredentialsApi(self._client)
 
     async def create_session(self, *, profile: Optional[str] = None) -> Session:
         params: dict[str, Any] = {}
@@ -82,6 +84,7 @@ __all__ = [
     "Candidate",
     "Cookie",
     "VaultApi",
+    "CredentialsApi",
     "JsonRpcTransportError",
     "HuskApiError",
     "parse_snapshot",

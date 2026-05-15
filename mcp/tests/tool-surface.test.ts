@@ -80,3 +80,22 @@ describe("vault tools", () => {
     expect(client.call).toHaveBeenCalledWith("vault_list_profiles", {});
   });
 });
+
+describe("login + credentials tools", () => {
+  it("TOOL_SURFACE includes husk_login + husk_credentials_set", () => {
+    const names = TOOL_SURFACE.map((t) => t.name);
+    expect(names).toContain("husk_login");
+    expect(names).toContain("husk_credentials_set");
+  });
+
+  it("husk_login schema requires session_id, profile, key", () => {
+    const tool = TOOL_SURFACE.find((t) => t.name === "husk_login")!;
+    expect(tool.inputSchema.required).toEqual(expect.arrayContaining(["session_id", "profile", "key"]));
+  });
+
+  it("handleToolCall routes husk_login to JSON-RPC login", async () => {
+    const client = { call: vi.fn(async () => ({ ok: true, url_before: "a", url_after: "b" })) };
+    await handleToolCall(client as any, "husk_login", { session_id: "s1", profile: "default", key: "github.com" });
+    expect(client.call).toHaveBeenCalledWith("login", { session_id: "s1", profile: "default", key: "github.com" });
+  });
+});

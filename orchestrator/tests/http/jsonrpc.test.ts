@@ -14,7 +14,7 @@ function fakeSessionMgr(): SessionManager {
 }
 
 function ctx(): MethodContext {
-  return { sessions: fakeSessionMgr(), version: "0.0.0-test", vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any };
+  return { sessions: fakeSessionMgr(), version: "0.0.0-test", vault: { listProfiles: () => [], list: () => [], clear: () => {}, remove: () => {} } as any, credentials: { listProfiles: () => [], list: () => [], get: () => null, set: () => {}, remove: () => {}, close: () => {} } as any };
 }
 
 describe("dispatch", () => {
