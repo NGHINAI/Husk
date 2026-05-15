@@ -11,6 +11,7 @@ from ._transport import JsonRpcClient, JsonRpcTransportError, HuskApiError
 from ._types import (
     ActionResult,
     Candidate,
+    Cookie,
     RejectionEnvelope,
     Snapshot,
     SnapshotDiff,
@@ -18,8 +19,10 @@ from ._types import (
     SuccessResult,
     Warning_ as Warning,
     parse_action_result,
+    parse_cookie,
     parse_snapshot,
 )
+from ._vault import VaultApi
 
 
 __version__ = "0.0.0"
@@ -43,9 +46,13 @@ class Husk:
     ) -> None:
         self.base_url = base_url
         self._client = JsonRpcClient(base_url=base_url, http_client=_http_client)
+        self.vault = VaultApi(self._client)
 
-    async def create_session(self) -> Session:
-        r = await self._client.call("create_session", {})
+    async def create_session(self, *, profile: Optional[str] = None) -> Session:
+        params: dict[str, Any] = {}
+        if profile is not None:
+            params["profile"] = profile
+        r = await self._client.call("create_session", params)
         return Session(self._client, r["session_id"])
 
     async def health(self) -> dict[str, Any]:
@@ -73,10 +80,13 @@ __all__ = [
     "RejectionEnvelope",
     "Warning",
     "Candidate",
+    "Cookie",
+    "VaultApi",
     "JsonRpcTransportError",
     "HuskApiError",
     "parse_snapshot",
     "parse_action_result",
+    "parse_cookie",
     "find_in_snapshot",
     "find_all_in_snapshot",
     "__version__",
