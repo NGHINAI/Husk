@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "lint": "echo 'lint config in M3'",
     "typecheck": "tsc --noEmit",
-    "start": "node ./dist/index.js"
+    "start": "node ./dist/index.js",
+    "bench": "tsx bench/parallel-bench.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
@@ -29,6 +30,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.12.0",
     "@types/ws": "^8.5.13",
+    "tsx": "^4",
     "typescript": "^5.5.4",
     "vitest": "^2.0.0"
   }
