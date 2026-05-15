@@ -121,6 +121,34 @@ export const TOOL_SURFACE: ToolSpec[] = [
     description: "Husk — Return Husk MCP server version info.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "husk_login",
+    description: "Husk — Log into a website using stored credentials. Reads username/password (and optional TOTP secret) from the credentials store for the given profile + key. Returns { ok, url_before, url_after } on success or { ok: false, reason } on failure.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        profile: { type: "string", description: "Credential profile name" },
+        key: { type: "string", description: "Credential key (typically a hostname)" },
+      },
+      required: ["session_id", "profile", "key"],
+    },
+  },
+  {
+    name: "husk_credentials_set",
+    description: "Husk — Store a credential (username + password, optionally totp_secret) under a profile + key. The credentials store is AES-encrypted if HUSK_VAULT_KEY is set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: { type: "string" },
+        key: { type: "string" },
+        username: { type: "string" },
+        password: { type: "string" },
+        totp_secret: { type: "string", description: "Base32-encoded TOTP secret for 2FA-protected sites" },
+      },
+      required: ["profile", "key", "username", "password"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -134,6 +162,8 @@ const RPC_MAP: Record<string, string> = {
   husk_close_session: "close_session",
   husk_vault_list_profiles: "vault_list_profiles",
   husk_vault_clear: "vault_clear",
+  husk_login: "login",
+  husk_credentials_set: "credentials_set",
 };
 
 const VERSION = "0.0.0";
