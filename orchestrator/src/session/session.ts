@@ -13,6 +13,7 @@ import { captureCookies } from "../vault/capture.js";
 import { restoreCookies } from "../vault/restore.js";
 import { performLogin, type LoginInput, type LoginResult } from "../auth/login-flow.js";
 import { totpCode } from "../auth/totp.js";
+import type { EngineHandle } from "../engine/pool.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -28,6 +29,10 @@ export interface SessionOptions {
   /** Profile name. When supplied with `vault`, cookies are restored on create
    *  and captured on close. */
   profile?: string;
+  /** Pre-acquired engine handle from a pool. If supplied, Session.create
+   *  uses this instead of spawning a fresh lightpanda. The handle's release()
+   *  is invoked on Session.close(). */
+  engine?: EngineHandle | null;
 }
 
 /**
@@ -56,23 +61,36 @@ export class Session {
     private readonly siteGraph: SiteGraphCache | null = null,
     private readonly watchdog: Watchdog,
     private readonly vault: VaultStore | null = null,
-    private profile: string | null = null
+    private profile: string | null = null,
+    private readonly engineHandle: EngineHandle | null = null
   ) {}
 
   static async create(opts: SessionOptions = {}): Promise<Session> {
-    const binary = opts.binary ?? (await locateLightpanda());
-    const engine = await spawnLightpanda({
-      binary,
-      readinessTimeoutMs: opts.readinessTimeoutMs,
-      log: opts.log,
-    });
+    let engineProcess: LightpandaProcess;
+    let engineHandle: EngineHandle | null = null;
+
+    if (opts.engine) {
+      engineHandle = opts.engine;
+      engineProcess = opts.engine.process;
+    } else {
+      const binary = opts.binary ?? (await locateLightpanda());
+      engineProcess = await spawnLightpanda({
+        binary,
+        readinessTimeoutMs: opts.readinessTimeoutMs,
+        log: opts.log,
+      });
+    }
 
     // Discover the CDP WebSocket.
     // lightpanda returns an empty /json/list until a target is created, so we
     // fall back to /json/version which always carries the browser-level WS URL.
-    const wsUrl = await resolveBrowserWsUrl(engine.cdpBaseUrl);
+    const wsUrl = await resolveBrowserWsUrl(engineProcess.cdpBaseUrl);
     if (!wsUrl) {
-      await engine.close();
+      if (engineHandle) {
+        await engineHandle.release();
+      } else {
+        await engineProcess.close();
+      }
       throw new Error("Session.create: could not discover CDP WebSocket URL from /json/list or /json/version");
     }
     const cdp = new CdpClient(wsUrl);
@@ -85,10 +103,11 @@ export class Session {
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
     const inst = new Session(
-      engine, cdp, sessionId, "about:blank", null,
+      engineProcess, cdp, sessionId, "about:blank", null,
       opts.siteGraph ?? null, wd,
       opts.vault ?? null,
-      opts.profile ?? null
+      opts.profile ?? null,
+      engineHandle
     );
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
@@ -341,7 +360,11 @@ export class Session {
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
-    await this.engine.close();
+    if (this.engineHandle) {
+      await this.engineHandle.release();
+    } else {
+      await this.engine.close();
+    }
   }
 
   async restoreFromVault(): Promise<void> {
