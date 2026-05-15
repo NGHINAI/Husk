@@ -35,6 +35,9 @@ switch (cmd) {
   case "vault":
     await runVault(args.slice(1));
     break;
+  case "login":
+    await runLogin(args.slice(1));
+    break;
   case "help":
   case "--help":
   case "-h":
@@ -51,6 +54,11 @@ Usage:
                                           (default 127.0.0.1). Runs until killed.
   husk vault list                         List saved cookie profiles
   husk vault clear <profile>              Clear all cookies in a profile
+  husk login --profile <p> --key <k>      Store a credential (username/password/totp)
+                                          from stdin (3 lines: user, pass, totp?)
+  husk login --list [--profile <p>]       List stored credentials (no passwords)
+  husk login --remove --profile <p> --key <k>
+                                          Delete a credential
 
 Coming in later milestones:
   husk run <example>      Run an example agent (M6)
@@ -168,6 +176,86 @@ async function runServer(args: StartArgs): Promise<void> {
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+async function runLogin(rest: string[]): Promise<void> {
+  const loginArgs = parseLoginArgs(rest);
+  const credentialsDir = process.env.HUSK_CREDENTIALS_DIR ?? pathJoin(homedir(), ".husk", "credentials");
+  const store = new CredentialsStore({
+    credentialsDir,
+    encryptionKey: process.env.HUSK_VAULT_KEY,
+  });
+  try {
+    if (loginArgs.list) {
+      const profile = loginArgs.profile ?? "default";
+      const rows = store.list(profile);
+      if (rows.length === 0) {
+        console.log(`No credentials in profile "${profile}".`);
+      } else {
+        for (const row of rows) {
+          console.log(`${row.key}\t${row.username}`);
+        }
+      }
+      return;
+    }
+    if (loginArgs.remove) {
+      if (!loginArgs.profile || !loginArgs.key) {
+        console.error("Usage: husk login --remove --profile <p> --key <k>");
+        process.exit(1);
+      }
+      store.remove(loginArgs.profile, loginArgs.key);
+      console.log(`Removed ${loginArgs.key} from ${loginArgs.profile}.`);
+      return;
+    }
+    if (!loginArgs.profile || !loginArgs.key) {
+      console.error("Usage: husk login --profile <p> --key <k>");
+      process.exit(1);
+    }
+    const lines = await readStdinLines(3);
+    const [username, password, totp_secret_raw] = lines;
+    const totp_secret = totp_secret_raw && totp_secret_raw.trim() ? totp_secret_raw.trim() : undefined;
+    if (!username || !password) {
+      console.error("husk login: username and password required");
+      process.exit(1);
+    }
+    store.set(loginArgs.profile, { key: loginArgs.key, username, password, totp_secret });
+    console.log(`Stored credential for ${loginArgs.key} in profile ${loginArgs.profile}.`);
+  } finally {
+    store.close();
+  }
+}
+
+interface LoginCliArgs {
+  profile?: string;
+  key?: string;
+  list?: boolean;
+  remove?: boolean;
+}
+
+function parseLoginArgs(rest: string[]): LoginCliArgs {
+  const out: LoginCliArgs = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--profile") out.profile = rest[++i];
+    else if (a === "--key") out.key = rest[++i];
+    else if (a === "--list") out.list = true;
+    else if (a === "--remove") out.remove = true;
+    else { console.error(`husk login: unknown arg ${a}`); process.exit(1); }
+  }
+  return out;
+}
+
+async function readStdinLines(maxLines: number): Promise<string[]> {
+  return new Promise((resolve) => {
+    const chunks: string[] = [];
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => chunks.push(c.toString()));
+    process.stdin.on("end", () => {
+      const all = chunks.join("");
+      const lines = all.split(/\r?\n/);
+      resolve(lines.slice(0, maxLines));
+    });
+  });
 }
 
 async function runVault(rest: string[]): Promise<void> {
