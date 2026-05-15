@@ -52,4 +52,6 @@ export class Husk {
 export { Session } from "./session.js";
 export { JsonRpcClient, JsonRpcTransportError, HuskApiError } from "./transport.js";
 export type { ScrollDirection } from "./session.js";
+export { findInSnapshot, findAllInSnapshot } from "./snapshot.js";
+export type { FindCriteria } from "./snapshot.js";
 export * from "./types.js";
