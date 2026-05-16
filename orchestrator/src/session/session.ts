@@ -717,7 +717,9 @@ export interface SessionInjected {
     siteGraph: null,
     watchdog: Watchdog,
     vault: VaultStore | null,
-    profile: string | null
+    profile: string | null,
+    watchBus: WatchBus | null,
+    watchId: string | null
   ) => Session)(
     i.engine,
     fakeCdp,
@@ -727,7 +729,9 @@ export interface SessionInjected {
     null,
     fakeWatchdog,
     i.vault ?? null,
-    i.profile ?? null
+    i.profile ?? null,
+    null,
+    null
   );
   // fromInjected stubs fire Page.loadEventFired instantly with no inflight
   // requests, so the 500 ms idle window is unnecessary — opt into 0 ms so

@@ -74,17 +74,19 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
       return streamSSE(c, async (stream) => {
         await stream.writeSSE({ data: "", event: "connected" });
         await new Promise<void>((resolve) => {
-          const off = watchBus.subscribe(session_id, (e) => {
-            stream.writeSSE({ event: e.kind, data: JSON.stringify(e) }).catch(() => {
-              off();
-              resolve();
-            });
+          let done = false;
+          let off: (() => void) | null = null;
+          const cleanup = () => {
+            if (done) return;
+            done = true;
+            off?.();
+            resolve();
+          };
+          off = watchBus.subscribe(session_id, (e) => {
+            stream.writeSSE({ event: e.kind, data: JSON.stringify(e) }).catch(cleanup);
           });
           // Clean up when the client disconnects.
-          c.req.raw.signal.addEventListener("abort", () => {
-            off();
-            resolve();
-          });
+          c.req.raw.signal.addEventListener("abort", cleanup);
         });
       });
     });
