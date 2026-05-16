@@ -1,8 +1,6 @@
 export interface CdpLike {
   on(event: string, fn: (p: unknown) => void): void;
   off(event: string, fn: (p: unknown) => void): void;
-  /** Optional: return current number of in-flight network requests (used in tests). */
-  inflightCount?(): number;
 }
 
 export interface PageReadyOpts {
@@ -38,15 +36,8 @@ export async function waitForPageReady(
   const maxWaitMs = opts.maxWaitMs ?? 8000;
   const start = Date.now();
 
-  // Seed in-flight count from current state if the cdp object supports it.
-  // This handles the case where requests were already in-flight before the
-  // listener was registered (common in tests and in re-entrant call sites).
-  let inflight = cdp.inflightCount?.() ?? 0;
-  // Treat any pre-existing in-flight requests as evidence that a navigation
-  // has started (i.e. Page.loadEventFired may have already fired before we
-  // registered our listener). This lets the idle-window logic work correctly
-  // when waitForPageReady is called after navigation has begun.
-  let loadFired = inflight > 0;
+  let inflight = 0;
+  let loadFired = false;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   return new Promise<PageReadyResult>((resolve) => {

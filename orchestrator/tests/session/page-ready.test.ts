@@ -20,10 +20,11 @@ describe("waitForPageReady", () => {
 
   it("network-idle requires N ms of zero in-flight requests", async () => {
     const cdp = makeFakeCdp();
+    const p = waitForPageReady(cdp, { networkIdleMs: 300, maxWaitMs: 5000 });
     cdp.emit("Page.loadEventFired", {});
     cdp.startInflight("a");
     setTimeout(() => cdp.finishInflight("a"), 100);
-    const r = await waitForPageReady(cdp, { networkIdleMs: 300, maxWaitMs: 5000 });
+    const r = await p;
     expect(r.reason).toBe("network_idle");
     expect(r.waitedMs).toBeGreaterThanOrEqual(400);
   });
