@@ -189,12 +189,19 @@ export const METHODS = {
   },
 
   async extract(
-    params: { session_id: string; css: string },
+    params: { session_id: string; css?: string; selectors?: Record<string, string> },
     ctx: MethodContext
-  ): Promise<{ text: string | null }> {
+  ): Promise<{ text?: string | null; result?: Record<string, string | null> }> {
     const session = ctx.sessions.get(params.session_id);
-    const text = await session.extract({ css: params.css });
-    return { text };
+    if (params.selectors) {
+      const result = await session.extract({ selectors: params.selectors });
+      return { result: result as Record<string, string | null> };
+    }
+    if (params.css) {
+      const text = await session.extract({ css: params.css });
+      return { text: text as string | null };
+    }
+    throw new Error("extract requires either 'css' or 'selectors'");
   },
 
   async login(

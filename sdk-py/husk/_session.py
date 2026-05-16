@@ -202,5 +202,27 @@ class Session:
             params["filename"] = filename
         return await self._client.call("upload", params)
 
+    async def extract(
+        self,
+        *,
+        css: Optional[str] = None,
+        selectors: Optional[dict[str, str]] = None,
+    ) -> Optional[str] | dict[str, Optional[str]]:
+        """Extract text from the page.
+
+        Pass EITHER ``css`` for single selector (returns string|None),
+        OR ``selectors`` dict for multi-field extraction (returns {key: text|None}).
+        Multi-selector mode completes in one round-trip.
+        """
+        params: dict[str, Any] = {"session_id": self._id}
+        if css is not None:
+            params["css"] = css
+        if selectors is not None:
+            params["selectors"] = selectors
+        if css is None and selectors is None:
+            raise ValueError("extract requires either 'css' or 'selectors'")
+        result = await self._client.call("extract", params)
+        return result.get("result") or result.get("text") or result
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

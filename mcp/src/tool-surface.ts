@@ -169,14 +169,15 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_extract",
-    description: "Husk — Extract text from the current page by CSS selector. Runs document.querySelector and returns the matched element's textContent (trimmed), or null if no match. MUCH cheaper than husk_snapshot when you know what you want — ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB. Use this after husk_goto when you need a specific value from the page.",
+    description: "Husk — Extract text from the current page by CSS selector(s). EITHER pass {css} for a single selector (returns string|null), OR {selectors: {key: css, ...}} for multi-field extraction in ONE round-trip (returns {key: text|null}). Each selector is independently safe — one broken selector won't fail others. Use {selectors} when you need >1 field from a page; faster than N calls. ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB for snapshot.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        css: { type: "string", description: "CSS selector. The first matching element's textContent is returned." },
+        css: { type: "string", description: "Mode A: CSS selector (single-selector mode). The first matching element's textContent is returned." },
+        selectors: { type: "object", additionalProperties: { type: "string" }, description: "Mode B: Map of key to CSS selector (multi-selector mode). Returns {key: text|null}." },
       },
-      required: ["session_id", "css"],
+      required: ["session_id"],
     },
   },
   {

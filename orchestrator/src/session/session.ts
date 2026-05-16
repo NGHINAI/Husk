@@ -536,7 +536,7 @@ export class Session {
     }
   }
 
-  async extract(query: ExtractQuery): Promise<string | null> {
+  async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null>> {
     return await runExtract(this.cdp, this.sessionId, query);
   }
 

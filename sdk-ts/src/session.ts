@@ -92,6 +92,19 @@ export class Session {
     return await this.client.call<UploadResult>("upload", { session_id: this.id, ...target, ...fileSpec });
   }
 
+  /**
+   * Extract text from the page.
+   * Pass EITHER {css: string} for single selector (returns string|null),
+   * OR {selectors: {key: css}} for multi-field extraction (returns {key: text|null}).
+   * Multi-selector mode completes in one round-trip.
+   */
+  async extract(
+    input: { css: string } | { selectors: Record<string, string> }
+  ): Promise<string | null | Record<string, string | null>> {
+    const result = await this.client.call<any>("extract", { session_id: this.id, ...input });
+    return result.result ?? result.text ?? result;
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }
