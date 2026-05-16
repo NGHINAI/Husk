@@ -50,7 +50,10 @@ export type RejectionReason =
   | "wrong_role_for_action"
   | "policy_forbidden"
   | "policy_required_before"
-  | "policy_domain_denied";
+  | "policy_domain_denied"
+  | "no_match"
+  | "ambiguous_intent"
+  | "missing_target";
 
 export interface RejectionEnvelope {
   ok: false;
@@ -123,6 +126,13 @@ export interface Cookie {
 
 // ----- JSON-RPC envelope types -----
 
+/** Result of the create_session JSON-RPC method. */
+export interface CreateSessionResult {
+  session_id: string;
+  /** Non-null when the orchestrator is bound to 127.0.0.1 (loopback-only). */
+  watch_url: string | null;
+}
+
 export interface JsonRpcSuccessResponse<T = unknown> {
   jsonrpc: "2.0";
   id: string | number | null;
@@ -160,3 +170,29 @@ export type LoginReason =
 export type LoginResult =
   | { ok: true; url_before: string; url_after: string }
   | { ok: false; reason: LoginReason; key?: string; detail?: unknown };
+
+// ----- husk_wait_for types -----
+
+export interface WaitForCondition {
+  text?: string;
+  role?: string;
+  name?: string;
+  url_matches?: string;
+  network_idle?: number;
+  selector_visible?: string;
+  timeout_ms?: number;
+}
+
+export interface WaitForResult {
+  ok: boolean;
+  condition_met?: "text" | "role_name" | "url_matches" | "network_idle" | "selector_visible";
+  reason?: "timeout";
+  waited_ms: number;
+  stable_id?: string;
+}
+
+export interface UploadResult {
+  ok: boolean;
+  reason?: string;
+  candidates?: Candidate[];
+}

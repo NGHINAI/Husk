@@ -34,9 +34,10 @@ export function runPreActionSanity(
   if (!node.s.includes("v")) {
     return { ok: false, reason: "element_not_visible", node };
   }
-  // `type` on textbox/combobox/searchbox doesn't require `e` — read-only is
-  // expressed via `aria-readonly` which the adapter surfaces as `d`.
-  const isTypeOnText = verb === "type";
+  // `type` on textbox/combobox/searchbox and `upload` on file inputs don't
+  // require `e` — read-only is expressed via `aria-readonly` → `d` flag.
+  // For upload, lightpanda may not reliably set `e` on <input type="file">.
+  const isTypeOnText = verb === "type" || verb === "upload";
   if (node.s.includes("d")) {
     return { ok: false, reason: "element_disabled", node };
   }

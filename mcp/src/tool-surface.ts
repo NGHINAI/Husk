@@ -13,7 +13,7 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns { session_id }. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks.",
+    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. When watch_url is non-null, you can offer it to the user with a friendly prompt like \"want to watch what I'm seeing?\" — it opens a live view of the AX tree, your actions, and any rejections. The URL is local-only (127.0.0.1).",
     inputSchema: {
       type: "object",
       properties: {
@@ -47,37 +47,40 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element by stable_id. Watchdog-protected. The result INCLUDES a `diff` field showing what changed in the page after the action ({added, removed, changed} nodes), so you typically don't need a separate snapshot after a click. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
+    description: "Husk — Click an element. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"sign in button\"; resolved via deterministic AX scoring). On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[...]}. On no match, returns {ok:false, reason:\"no_match\"}. Use stable_id when you have it; intent when you don't. Watchdog-protected. The result INCLUDES a `diff` field showing what changed after the action. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: "string", description: "Stable id from a snapshot" },
+        stable_id: { type: "string", description: "Exact stable id from a snapshot. Use this when you have the id." },
+        intent: { type: "string", description: "Natural language description of the element to click, e.g. \"sign in button\" or \"submit form\". Resolved via deterministic AX scoring. Pass either stable_id or intent, not both." },
       },
-      required: ["session_id", "stable_id"],
+      required: ["session_id"],
     },
   },
   {
     name: "husk_type",
-    description: "Husk — Type into a text field by stable_id. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead — it handles the engine quirks and submits the form correctly.",
+    description: "Husk — Type into a text field. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"email textbox\"; resolved via deterministic AX scoring). On ambiguous or unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\"}. Requires `text`. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: "string" },
-        text: { type: "string" },
+        stable_id: { type: "string", description: "Exact stable id from a snapshot. Pass either stable_id or intent." },
+        intent: { type: "string", description: "Natural language description of the field, e.g. \"email textbox\". Pass either stable_id or intent." },
+        text: { type: "string", description: "Text to type into the field" },
       },
-      required: ["session_id", "stable_id", "text"],
+      required: ["session_id", "text"],
     },
   },
   {
     name: "husk_scroll",
-    description: "Husk — Scroll the page or an element into view. Result includes a `diff` field showing what's now visible.",
+    description: "Husk — Scroll the page or an element. Pass EITHER {stable_id} (exact, may be null for window scroll), {intent} (natural language like \"main content area\"), or omit both for a plain window scroll. On unresolved intent returns {ok:false, reason:\"no_match\"}. Result includes a `diff` field showing what's now visible.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: ["string", "null"], description: "Element to scroll into view, or null for window scroll" },
+        stable_id: { type: ["string", "null"], description: "Element stable id to scroll into view, or null for window scroll. Pass either stable_id or intent." },
+        intent: { type: "string", description: "Natural language description of the element to scroll, e.g. \"comments section\". Pass either stable_id or intent." },
         direction: { type: "string", enum: ["up", "down", "left", "right", "into_view"] },
         amount: { type: "number", description: "Pixels to scroll (ignored for into_view)" },
       },
@@ -166,14 +169,15 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_extract",
-    description: "Husk — Extract text from the current page by CSS selector. Runs document.querySelector and returns the matched element's textContent (trimmed), or null if no match. MUCH cheaper than husk_snapshot when you know what you want — ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB. Use this after husk_goto when you need a specific value from the page.",
+    description: "Husk — Extract text from the current page by CSS selector(s). EITHER pass {css} for a single selector (returns string|null), OR {selectors: {key: css, ...}} for multi-field extraction in ONE round-trip (returns {key: text|null}). Each selector is independently safe — one broken selector won't fail others. Use {selectors} when you need >1 field from a page; faster than N calls. ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB for snapshot.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        css: { type: "string", description: "CSS selector. The first matching element's textContent is returned." },
+        css: { type: "string", description: "Mode A: CSS selector (single-selector mode). The first matching element's textContent is returned." },
+        selectors: { type: "object", additionalProperties: { type: "string" }, description: "Mode B: Map of key to CSS selector (multi-selector mode). Returns {key: text|null}." },
       },
-      required: ["session_id", "css"],
+      required: ["session_id"],
     },
   },
   {
@@ -197,6 +201,40 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["urls"],
     },
   },
+  {
+    name: "husk_wait_for",
+    description: "Wait until a condition is true on the page. Conditions (pass at least one): text (substring in any visible node name), role+name (exact role + exact name), url_matches (regex against current URL), network_idle (ms of zero in-flight requests), selector_visible (CSS selector visible). Default timeout 10s. Returns {ok, condition_met, waited_ms, stable_id?}. Cheap to call — polls every 100ms locally.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        text: { type: "string" },
+        role: { type: "string" },
+        name: { type: "string" },
+        url_matches: { type: "string" },
+        network_idle: { type: "number" },
+        selector_visible: { type: "string" },
+        timeout_ms: { type: "number" },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "husk_upload",
+    description: "Upload a file to a <input type=\"file\"> element. Pass EITHER {stable_id} OR {intent} to target the input. File contents come from EITHER {file_path} (absolute or relative path) OR {content_base64, filename}. Routes through the watchdog (rejects if the element isn't found or is disabled). Returns {ok, reason?, candidates?}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        stable_id: { type: "string" },
+        intent: { type: "string" },
+        file_path: { type: "string" },
+        content_base64: { type: "string" },
+        filename: { type: "string" },
+      },
+      required: ["session_id"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -215,6 +253,8 @@ const RPC_MAP: Record<string, string> = {
   husk_credentials_set: "credentials_set",
   husk_extract: "extract",
   husk_batch_visit: "batch_visit",
+  husk_wait_for: "wait_for",
+  husk_upload: "upload",
 };
 
 const VERSION = "0.0.0";

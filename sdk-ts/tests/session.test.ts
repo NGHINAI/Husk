@@ -53,7 +53,7 @@ describe("Husk + Session", () => {
     expect(got).toEqual(snap);
   });
 
-  it("session.click returns ActionResult — successful path carries warnings", async () => {
+  it("session.click({stable_id}) returns ActionResult — successful path carries warnings", async () => {
     const h = new Husk({
       baseUrl: "http://x.test",
       fetch: makeMockFetch({
@@ -62,9 +62,23 @@ describe("Husk + Session", () => {
       }) as unknown as typeof fetch,
     });
     const s = await h.createSession();
-    const r: ActionResult = await s.click("button:ok");
+    const r: ActionResult = await s.click({ stable_id: "button:ok" });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warnings).toEqual([]);
+  });
+
+  it("session.click({intent}) forwards intent in JSON-RPC params", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const h = new Husk({
+      baseUrl: "http://x.test",
+      fetch: makeMockFetch({
+        create_session: () => ({ session_id: "s1" }),
+        click: (p) => { calls.push({ method: "click", params: p }); return { ok: true, warnings: [] }; },
+      }) as unknown as typeof fetch,
+    });
+    const s = await h.createSession();
+    await s.click({ intent: "sign in button" });
+    expect(calls[0].params).toMatchObject({ session_id: "s1", intent: "sign in button" });
   });
 
   it("session.click returns rejection envelope verbatim — agent re-plans", async () => {
@@ -80,7 +94,7 @@ describe("Husk + Session", () => {
       }) as unknown as typeof fetch,
     });
     const s = await h.createSession();
-    const r = await s.click("button:ghost");
+    const r = await s.click({ stable_id: "button:ghost" });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("element_not_found");
@@ -100,8 +114,8 @@ describe("Husk + Session", () => {
     });
     const h = new Husk({ baseUrl: "http://x.test", fetch: fetchMock as unknown as typeof fetch });
     const s = await h.createSession();
-    await s.type("textbox:e", "hi");
-    await s.scroll(null, "down", 300);
+    await s.type({ stable_id: "textbox:e" }, "hi");
+    await s.scroll({ stable_id: null }, "down", 300);
     await s.pressKey("Enter");
     await s.close();
     expect(calls.map((c) => c.method)).toEqual(["type", "scroll", "press_key", "close_session"]);

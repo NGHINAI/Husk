@@ -33,7 +33,7 @@ export async function batchVisit(
         const session = ctx.sessions.get(sessionId);
         await session.goto(url);
         if (params.extract?.css) {
-          const text = await session.extract({ css: params.extract.css });
+          const text = (await session.extract({ css: params.extract.css })) as string | null;
           return { url, ok: true, text };
         }
         const snapshot = await session.snapshot({ mode: "terse" });

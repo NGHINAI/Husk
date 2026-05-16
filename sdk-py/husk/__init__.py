@@ -55,7 +55,9 @@ class Husk:
         if profile is not None:
             params["profile"] = profile
         r = await self._client.call("create_session", params)
-        return Session(self._client, r["session_id"])
+        session = Session(self._client, r["session_id"])
+        session.watch_url = r.get("watch_url")
+        return session
 
     async def health(self) -> dict[str, Any]:
         return await self._client.call("health", {})

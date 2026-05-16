@@ -4,6 +4,7 @@ import { InvalidUrlError } from "./errors.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
+import type { WaitForCondition, WaitForResult } from "../session/wait.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -12,6 +13,16 @@ export interface MethodContext {
   version: string;
   vault: VaultStore;
   credentials: CredentialsStore;
+  /**
+   * The host the server is bound to (e.g. "127.0.0.1" or "0.0.0.0").
+   * When "127.0.0.1", create_session returns a watch_url.
+   */
+  host?: string;
+  /**
+   * Mutable reference cell for the bound port. Updated after the server
+   * socket resolves the ephemeral port (port 0 → actual port).
+   */
+  portRef?: { value: number };
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -24,6 +35,8 @@ export interface HealthResult {
 /** Result of `create_session`. */
 export interface CreateSessionResult {
   session_id: string;
+  /** Present and non-null when the server is bound to 127.0.0.1 (loopback-only). */
+  watch_url: string | null;
 }
 
 /** Result of `goto`. */
@@ -50,7 +63,11 @@ export const METHODS = {
     ctx: MethodContext
   ): Promise<CreateSessionResult> {
     const session_id = await ctx.sessions.create({ profile: params?.profile });
-    return { session_id };
+    const watch_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://127.0.0.1:${ctx.portRef.value}/watch?s=${encodeURIComponent(session_id)}`
+        : null;
+    return { session_id, watch_url };
   },
 
   async goto(
@@ -94,27 +111,27 @@ export const METHODS = {
   },
 
   async click(
-    params: { session_id: string; stable_id: string },
+    params: { session_id: string; stable_id?: string; intent?: string },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.click(params.stable_id);
+    return await session.click({ stable_id: params.stable_id, intent: params.intent });
   },
 
   async type(
-    params: { session_id: string; stable_id: string; text: string },
+    params: { session_id: string; stable_id?: string; intent?: string; text: string },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.type(params.stable_id, params.text);
+    return await session.type({ stable_id: params.stable_id, intent: params.intent }, params.text);
   },
 
   async scroll(
-    params: { session_id: string; stable_id: string | null; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
+    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.scroll(params.stable_id, params.direction, params.amount);
+    return await session.scroll({ stable_id: params.stable_id, intent: params.intent }, params.direction, params.amount);
   },
 
   async press_key(
@@ -188,12 +205,19 @@ export const METHODS = {
   },
 
   async extract(
-    params: { session_id: string; css: string },
+    params: { session_id: string; css?: string; selectors?: Record<string, string> },
     ctx: MethodContext
-  ): Promise<{ text: string | null }> {
+  ): Promise<{ text?: string | null; result?: Record<string, string | null> }> {
     const session = ctx.sessions.get(params.session_id);
-    const text = await session.extract({ css: params.css });
-    return { text };
+    if (params.selectors) {
+      const result = await session.extract({ selectors: params.selectors });
+      return { result: result as Record<string, string | null> };
+    }
+    if (params.css) {
+      const text = await session.extract({ css: params.css });
+      return { text: text as string | null };
+    }
+    throw new Error("extract requires either 'css' or 'selectors'");
   },
 
   async login(
@@ -247,6 +271,33 @@ export const METHODS = {
   ): Promise<{ results: BatchVisitItem[] }> {
     const results = await batchVisit(ctx, params);
     return { results };
+  },
+
+  async wait_for(
+    params: { session_id: string } & WaitForCondition,
+    ctx: MethodContext
+  ): Promise<WaitForResult> {
+    const session = ctx.sessions.get(params.session_id);
+    const { session_id: _sid, ...cond } = params;
+    return session.waitFor(cond);
+  },
+
+  async upload(
+    params: {
+      session_id: string;
+      stable_id?: string;
+      intent?: string;
+      file_path?: string;
+      content_base64?: string;
+      filename?: string;
+    },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return session.upload(
+      { stable_id: params.stable_id, intent: params.intent },
+      { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
+    );
   },
 } as const;
 

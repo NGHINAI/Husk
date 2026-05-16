@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { serve, type ServerType } from "@hono/node-server";
 import pino, { type Logger } from "pino";
 import { dispatch } from "./jsonrpc.js";
@@ -7,6 +8,8 @@ import type { MethodContext } from "./methods.js";
 import type { SessionManager } from "../session/manager.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
+import type { WatchBus } from "../watch/sse.js";
+import { WATCH_HTML } from "../watch/index.html.js";
 
 export interface HuskServerOptions {
   port: number;
@@ -18,6 +21,8 @@ export interface HuskServerOptions {
   credentials: CredentialsStore;
   /** Pino log level: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent". */
   logLevel?: string;
+  /** Watch event bus for the /watch/stream SSE route. Only registered when host === "127.0.0.1". */
+  watchBus?: WatchBus;
 }
 
 export interface HuskServer {
@@ -37,7 +42,17 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   const log = pino({ level: opts.logLevel ?? "info", name: "husk-orchestrator" });
   const app = new Hono();
 
-  const ctx: MethodContext = { sessions: opts.sessions, version: opts.version, vault: opts.vault, credentials: opts.credentials };
+  // We resolve boundPort after the server starts; for create_session watch_url
+  // we capture a reference cell updated once the port is known.
+  const portRef = { value: opts.port };
+  const ctx: MethodContext = {
+    sessions: opts.sessions,
+    version: opts.version,
+    vault: opts.vault,
+    credentials: opts.credentials,
+    host: opts.host,
+    portRef,
+  };
 
   app.post("/v1/jsonrpc", async (c) => {
     let parsed: unknown;
@@ -61,6 +76,34 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   // Method-not-allowed for non-POST
   app.all("/v1/jsonrpc", (c) => c.text("Method Not Allowed", 405));
 
+  // /watch and /watch/stream/:session_id — HTML viewer + SSE stream.
+  // Only registered when the server is bound to 127.0.0.1 (loopback-only guard).
+  if (opts.host === "127.0.0.1" && opts.watchBus) {
+    app.get("/watch", (c) => c.html(WATCH_HTML));
+    const watchBus = opts.watchBus;
+    app.get("/watch/stream/:session_id", (c) => {
+      const session_id = c.req.param("session_id");
+      return streamSSE(c, async (stream) => {
+        await stream.writeSSE({ data: "", event: "connected" });
+        await new Promise<void>((resolve) => {
+          let done = false;
+          let off: (() => void) | null = null;
+          const cleanup = () => {
+            if (done) return;
+            done = true;
+            off?.();
+            resolve();
+          };
+          off = watchBus.subscribe(session_id, (e) => {
+            stream.writeSSE({ event: e.kind, data: JSON.stringify(e) }).catch(cleanup);
+          });
+          // Clean up when the client disconnects.
+          c.req.raw.signal.addEventListener("abort", cleanup);
+        });
+      });
+    });
+  }
+
   const server = await new Promise<ServerType>((resolve) => {
     const s = serve({ fetch: app.fetch, port: opts.port, hostname: opts.host }, (info) => {
       log.info({ port: info.port, host: opts.host }, "husk http server listening");
@@ -71,6 +114,8 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   const addr = (server as { address?: () => unknown }).address?.();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const boundPort = typeof addr === "object" && addr !== null ? (addr as any).port : opts.port;
+  // Update portRef so create_session can embed the correct port in watch_url.
+  portRef.value = boundPort;
 
   return {
     port: boundPort,

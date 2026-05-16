@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Session } from "./session.js";
+import type { WatchBus } from "../watch/sse.js";
 
 /**
  * Thrown when an operation references a session_id that doesn't exist
@@ -19,7 +20,7 @@ export class SessionNotFoundError extends Error {
  * production this is `Session.create.bind(Session, opts)`. In tests we
  * pass a function returning a fake.
  */
-export type SessionFactory = (opts?: { profile?: string }) => Promise<Session>;
+export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; watchSessionId?: string }) => Promise<Session>;
 
 /**
  * Owns the lifecycle of all live sessions. Each session has a unique id
@@ -28,11 +29,19 @@ export type SessionFactory = (opts?: { profile?: string }) => Promise<Session>;
  */
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
-  constructor(private readonly factory: SessionFactory) {}
+  constructor(
+    private readonly factory: SessionFactory,
+    /** Optional watch event bus. When present, each new session gets wired to it. */
+    private readonly watchBus?: WatchBus
+  ) {}
 
   async create(opts: { profile?: string } = {}): Promise<string> {
-    const session = await this.factory(opts);
     const id = randomUUID();
+    const session = await this.factory({
+      ...opts,
+      watchBus: this.watchBus,
+      watchSessionId: id,
+    });
     this.sessions.set(id, session);
     return id;
   }

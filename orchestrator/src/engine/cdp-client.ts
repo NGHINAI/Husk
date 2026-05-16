@@ -22,6 +22,8 @@ type PendingEntry = {
   reject: (err: Error) => void;
 };
 
+type EventHandler = (params: unknown) => void;
+
 /**
  * Minimal Chrome DevTools Protocol client over a single WebSocket.
  *
@@ -33,6 +35,7 @@ export class CdpClient {
   private readonly ws: WebSocket;
   private nextId = 0;
   private readonly pending = new Map<number, PendingEntry>();
+  private readonly eventListeners = new Map<string, Set<EventHandler>>();
   readonly ready: Promise<void>;
 
   constructor(wsUrl: string) {
@@ -82,6 +85,23 @@ export class CdpClient {
     return attachRes.sessionId;
   }
 
+  /**
+   * Subscribe to CDP event notifications (messages without an `id`).
+   * The `event` string is the CDP method name, e.g. `"Page.loadEventFired"`.
+   * Matches the `CdpLike` interface expected by `waitForPageReady`.
+   */
+  on(event: string, fn: EventHandler): void {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(fn);
+  }
+
+  /** Unsubscribe a previously registered event handler. */
+  off(event: string, fn: EventHandler): void {
+    this.eventListeners.get(event)?.delete(fn);
+  }
+
   /** Close the underlying socket. Pending requests are rejected. */
   close(): Promise<void> {
     if (
@@ -97,13 +117,22 @@ export class CdpClient {
 
   private onMessage(data: WebSocket.RawData): void {
     const text = typeof data === "string" ? data : data.toString();
-    let msg: { id?: number; result?: unknown; error?: CdpErrorPayload };
+    let msg: { id?: number; method?: string; params?: unknown; result?: unknown; error?: CdpErrorPayload };
     try {
       msg = JSON.parse(text);
     } catch {
       return;
     }
-    if (msg.id == null) return; // event notification — ignored in v0
+    if (msg.id == null) {
+      // CDP event notification — dispatch to registered listeners.
+      if (msg.method) {
+        const listeners = this.eventListeners.get(msg.method);
+        if (listeners) {
+          for (const fn of listeners) fn(msg.params ?? {});
+        }
+      }
+      return;
+    }
     const entry = this.pending.get(msg.id);
     if (!entry) return;
     this.pending.delete(msg.id);

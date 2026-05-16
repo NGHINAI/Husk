@@ -4,9 +4,19 @@ import type {
   Snapshot,
   SnapshotDiff,
   LoginResult,
+  WaitForCondition,
+  WaitForResult,
+  UploadResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
+
+/**
+ * Target specifier for action methods. Pass EITHER `stable_id` (exact, from
+ * snapshot) OR `intent` (natural language, e.g. "sign in button").
+ * For scroll, `stable_id` may be null for window-level scroll.
+ */
+export type Target = { stable_id?: string | null; intent?: string };
 
 /**
  * Per-session API. One instance per session_id. All methods are thin
@@ -28,16 +38,16 @@ export class Session {
     return await this.client.call<SnapshotDiff | null>("snapshot_diff", { session_id: this.id });
   }
 
-  async click(stable_id: string): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("click", { session_id: this.id, stable_id });
+  async click(target: Target): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("click", { session_id: this.id, ...target });
   }
 
-  async type(stable_id: string, text: string): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("type", { session_id: this.id, stable_id, text });
+  async type(target: Target, text: string): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("type", { session_id: this.id, ...target, text });
   }
 
-  async scroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("scroll", { session_id: this.id, stable_id, direction, amount });
+  async scroll(target: Target, direction: ScrollDirection, amount: number): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("scroll", { session_id: this.id, ...target, direction, amount });
   }
 
   async pressKey(key: string): Promise<ActionResult> {
@@ -64,6 +74,37 @@ export class Session {
       session_id: this.id,
       ...args,
     });
+  }
+
+  async waitFor(c: WaitForCondition): Promise<WaitForResult> {
+    return await this.client.call<WaitForResult>("wait_for", { session_id: this.id, ...c });
+  }
+
+  /**
+   * Upload a file to an `<input type="file">` element.
+   * Pass `{ stable_id }` or `{ intent }` to target the input.
+   * File contents come from EITHER `{ file_path }` OR `{ content_base64, filename }`.
+   */
+  async upload(
+    target: { stable_id?: string; intent?: string },
+    fileSpec: { file_path?: string; content_base64?: string; filename?: string },
+  ): Promise<UploadResult> {
+    return await this.client.call<UploadResult>("upload", { session_id: this.id, ...target, ...fileSpec });
+  }
+
+  /**
+   * Extract text from the page.
+   * Pass EITHER {css: string} for single selector (returns string|null),
+   * OR {selectors: {key: css}} for multi-field extraction (returns {key: text|null}).
+   * Multi-selector mode completes in one round-trip.
+   */
+  async extract(input: { css: string }): Promise<string | null>;
+  async extract(input: { selectors: Record<string, string> }): Promise<Record<string, string | null>>;
+  async extract(
+    input: { css: string } | { selectors: Record<string, string> }
+  ): Promise<string | null | Record<string, string | null>> {
+    const result = await this.client.call<any>("extract", { session_id: this.id, ...input });
+    return result.result ?? result.text ?? result;
   }
 
   async close(): Promise<void> {
