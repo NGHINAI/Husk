@@ -305,6 +305,7 @@ export class Session {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "upload", stable_id);
     if (!pre.ok) {
+      // TODO(M14): mirror click/type and return the full RejectionEnvelope (candidates + snapshot_at_attempt)
       return { ok: false, reason: pre.envelope.reason };
     }
     if (pre.backendNodeId == null) {

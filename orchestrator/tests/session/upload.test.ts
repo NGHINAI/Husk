@@ -74,4 +74,19 @@ describe("runUpload", () => {
     const filesArg = (cdp.send.mock.calls[0][1] as { files: string[] }).files[0];
     expect(filesArg.startsWith("/")).toBe(true);
   });
+
+  it("strips path traversal from filename (security)", async () => {
+    const cdp = { send: vi.fn().mockResolvedValue({}) };
+    const r = await runUpload({ cdp, resolveBackendNodeId: async () => 1 }, {
+      stable_id: "x",
+      content_base64: Buffer.from("oops").toString("base64"),
+      filename: "../../etc/evil.txt",
+    });
+    expect(r.ok).toBe(true);
+    const filesArg = (cdp.send.mock.calls[0][1] as { files: string[] }).files[0];
+    // basename strips the traversal — filename portion should be 'evil.txt' only
+    expect(filesArg.endsWith("/evil.txt")).toBe(true);
+    expect(filesArg).not.toContain("..");
+    expect(filesArg).toMatch(/husk-upload-/);
+  });
 });

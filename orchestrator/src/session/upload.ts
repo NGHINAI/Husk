@@ -1,6 +1,6 @@
 import { existsSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath, basename } from "node:path";
 
 export interface UploadInput {
   stable_id: string;
@@ -34,8 +34,9 @@ export async function runUpload(ctx: UploadCtx, input: UploadInput): Promise<Upl
     if (!input.filename) {
       throw new Error("husk_upload: content_base64 requires filename");
     }
+    // TODO: macOS does not sweep /tmp on reboot; consider tracking + cleaning these on session.close()
     const dir = mkdtempSync(join(tmpdir(), "husk-upload-"));
-    absPath = join(dir, input.filename);
+    absPath = join(dir, basename(input.filename!));
     writeFileSync(absPath, Buffer.from(input.content_base64!, "base64"));
   }
 
