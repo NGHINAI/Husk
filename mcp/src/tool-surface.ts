@@ -13,7 +13,7 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. When watch_url is non-null, you can offer it to the user with a friendly prompt like \"want to watch what I'm seeing?\" — it opens a live view of the AX tree, your actions, and any rejections. The URL is local-only (127.0.0.1).",
+    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. IMPORTANT: when watch_url is non-null, on your VERY NEXT message to the user (before any further tool calls), include one sentence like \"Want to watch what I'm seeing? Open <watch_url>\" with the literal URL pasted in. This is the only way the user learns the live viewer exists — do not skip it, do not summarize it, do not paraphrase the URL. The URL opens a live view of the AX tree, your actions, and rejections; it is local-only (127.0.0.1, no network exposure).",
     inputSchema: {
       type: "object",
       properties: {
