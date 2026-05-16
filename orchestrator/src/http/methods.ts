@@ -13,6 +13,16 @@ export interface MethodContext {
   version: string;
   vault: VaultStore;
   credentials: CredentialsStore;
+  /**
+   * The host the server is bound to (e.g. "127.0.0.1" or "0.0.0.0").
+   * When "127.0.0.1", create_session returns a watch_url.
+   */
+  host?: string;
+  /**
+   * Mutable reference cell for the bound port. Updated after the server
+   * socket resolves the ephemeral port (port 0 → actual port).
+   */
+  portRef?: { value: number };
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -25,6 +35,8 @@ export interface HealthResult {
 /** Result of `create_session`. */
 export interface CreateSessionResult {
   session_id: string;
+  /** Present and non-null when the server is bound to 127.0.0.1 (loopback-only). */
+  watch_url: string | null;
 }
 
 /** Result of `goto`. */
@@ -51,7 +63,11 @@ export const METHODS = {
     ctx: MethodContext
   ): Promise<CreateSessionResult> {
     const session_id = await ctx.sessions.create({ profile: params?.profile });
-    return { session_id };
+    const watch_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://127.0.0.1:${ctx.portRef.value}/watch?s=${encodeURIComponent(session_id)}`
+        : null;
+    return { session_id, watch_url };
   },
 
   async goto(

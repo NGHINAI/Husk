@@ -1,6 +1,6 @@
 import { JsonRpcClient } from "./transport.js";
 import { Session } from "./session.js";
-import type { Cookie } from "./types.js";
+import type { Cookie, CreateSessionResult } from "./types.js";
 
 export const SDK_VERSION = "0.0.0";
 
@@ -98,10 +98,12 @@ export class Husk {
     this.credentials = new CredentialsApi(this.client);
   }
 
-  async createSession(options: { profile?: string } = {}): Promise<Session> {
+  async createSession(options: { profile?: string } = {}): Promise<Session & { watchUrl: string | null }> {
     const params = options.profile !== undefined ? { profile: options.profile } : {};
-    const { session_id } = await this.client.call<{ session_id: string }>("create_session", params);
-    return new Session(this.client, session_id);
+    const { session_id, watch_url } = await this.client.call<CreateSessionResult>("create_session", params);
+    const session = new Session(this.client, session_id) as Session & { watchUrl: string | null };
+    session.watchUrl = watch_url ?? null;
+    return session;
   }
 
   async health(): Promise<HealthResult> {

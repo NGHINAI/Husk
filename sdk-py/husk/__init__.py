@@ -1,6 +1,7 @@
 """Husk — open-source browser engine for AI agents (Python SDK)."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
@@ -30,6 +31,19 @@ __version__ = "0.0.0"
 DEFAULT_BASE_URL = "http://localhost:7777"
 
 
+@dataclass
+class CreateSessionHandle:
+    """Returned by Husk.create_session(). Bundles the Session with the optional watch URL."""
+
+    session: Session
+    watch_url: Optional[str]
+
+    # Convenience: delegate common attributes so callers can treat this like a Session
+    @property
+    def id(self) -> str:
+        return self.session.id
+
+
 class Husk:
     """Husk SDK client.
 
@@ -50,12 +64,14 @@ class Husk:
         self.vault = VaultApi(self._client)
         self.credentials = CredentialsApi(self._client)
 
-    async def create_session(self, *, profile: Optional[str] = None) -> Session:
+    async def create_session(self, *, profile: Optional[str] = None) -> "CreateSessionHandle":
         params: dict[str, Any] = {}
         if profile is not None:
             params["profile"] = profile
         r = await self._client.call("create_session", params)
-        return Session(self._client, r["session_id"])
+        session = Session(self._client, r["session_id"])
+        watch_url: Optional[str] = r.get("watch_url")
+        return CreateSessionHandle(session=session, watch_url=watch_url)
 
     async def health(self) -> dict[str, Any]:
         return await self._client.call("health", {})
@@ -72,6 +88,7 @@ class Husk:
 
 __all__ = [
     "Husk",
+    "CreateSessionHandle",
     "Session",
     "ScrollDirection",
     "Snapshot",

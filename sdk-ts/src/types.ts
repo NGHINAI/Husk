@@ -126,6 +126,13 @@ export interface Cookie {
 
 // ----- JSON-RPC envelope types -----
 
+/** Result of the create_session JSON-RPC method. */
+export interface CreateSessionResult {
+  session_id: string;
+  /** Non-null when the orchestrator is bound to 127.0.0.1 (loopback-only). */
+  watch_url: string | null;
+}
+
 export interface JsonRpcSuccessResponse<T = unknown> {
   jsonrpc: "2.0";
   id: string | number | null;

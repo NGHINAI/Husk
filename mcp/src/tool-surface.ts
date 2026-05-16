@@ -13,7 +13,7 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns { session_id }. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks.",
+    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. When watch_url is non-null, you can offer it to the user with a friendly prompt like \"want to watch what I'm seeing?\" — it opens a live view of the AX tree, your actions, and any rejections. The URL is local-only (127.0.0.1).",
     inputSchema: {
       type: "object",
       properties: {
