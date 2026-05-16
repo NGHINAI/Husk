@@ -1,5 +1,6 @@
 import { spawnLightpanda, type LightpandaProcess } from "../engine/lifecycle.js";
 import { CdpClient } from "../engine/cdp-client.js";
+import { waitForPageReady } from "./page-ready.js";
 import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff } from "../snapshot/types.js";
@@ -101,6 +102,7 @@ export class Session {
     // Create a fresh target and attach to it (sessionId for subsequent calls).
     const sessionId = await cdp.createAndAttachTarget("about:blank");
     await cdp.send("Page.enable", {}, sessionId);
+    await cdp.send("Network.enable", {}, sessionId);
     await cdp.send("Accessibility.enable", {}, sessionId);
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
@@ -120,9 +122,11 @@ export class Session {
   async goto(url: string): Promise<void> {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
-    // Crude wait — sufficient for v0. M5 will hook Page.loadEventFired.
-    // Bumped from 1000ms to 1500ms to match the M2 spike PoC's working timing.
-    await new Promise((r) => setTimeout(r, 1500));
+    // Wait for the page to reach a network-idle state instead of a fixed delay.
+    // Resolves when Page.loadEventFired fires AND in-flight requests are gone for
+    // 500 ms, or after a hard 8-second cap (max_wait fallback).
+    // Requires Page.enable + Network.enable to be called during session init.
+    await waitForPageReady(this.cdp, { networkIdleMs: 500, maxWaitMs: 8000 });
     // Eager snapshot: cache lastSnapshot so the agent's next snapshot() call is instant.
     // Use force:true so navigation always fetches a fresh AX tree (not a stale cache).
     // Best-effort: don't fail goto if AX capture has a transient issue.
@@ -437,7 +441,22 @@ export interface SessionInjected {
 (Session as unknown as {
   fromInjected: (i: SessionInjected) => Session;
 }).fromInjected = (i: SessionInjected): Session => {
-  const fakeCdp = { ...i.cdp, close: i.cdp.close ?? (async () => {}) };
+  // Add no-op on/off stubs if the injected CDP doesn't have them, and fire
+  // Page.loadEventFired immediately when registered so that waitForPageReady
+  // resolves instantly in unit tests (no real browser, no real events).
+  const injectedOnOff = "on" in i.cdp && typeof (i.cdp as { on?: unknown }).on === "function"
+    ? {}
+    : {
+        on(event: string, fn: (p: unknown) => void) {
+          if (event === "Page.loadEventFired") {
+            // Simulate instant load by firing the event in the next microtask.
+            Promise.resolve().then(() => fn({}));
+          }
+          // Network events: no-op — inflight stays 0, idle fires immediately after load.
+        },
+        off(_event: string, _fn: (p: unknown) => void) { /* no-op */ },
+      };
+  const fakeCdp = { ...i.cdp, close: i.cdp.close ?? (async () => {}), ...injectedOnOff };
   // Use a real Watchdog so that evaluatePre can resolve backendNodeId via the
   // snapshot's _resolver (populated by transformAxTree). Tests that need DOM
   // interactions (click, type) will work correctly as long as the CDP mock
