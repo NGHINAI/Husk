@@ -47,7 +47,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"sign in button\"; resolved via deterministic AX scoring). On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[...]}. On no match, returns {ok:false, reason:\"no_match\"}. Use stable_id when you have it; intent when you don't. Watchdog-protected. The result INCLUDES a `diff` field showing what changed after the action. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
+    description: "Husk — Click an element. STRONGLY PREFER {intent} (natural language like \"100PC Wings with Fries\" or \"sign in button\") over {stable_id} — intent is faster than re-snapshotting to find an id, and reads naturally from the user's request. Resolved via deterministic AX scoring (~1ms). DO NOT use husk_press_key as a substitute for clicking — keyboard-nav is unreliable on JS sites; always try husk_click({intent}) first. If the element name appeared in a recent snapshot, pass that name verbatim as the intent. On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[{stable_id, role, name, score}]} — pick the right candidate by stable_id and retry. On no match, returns {ok:false, reason:\"no_match\"}. On disabled element, returns watchdog rejection {ok:false, reason:\"element_disabled\"} — tell the user the element is disabled rather than trying workarounds. Watchdog-protected. Result includes a `diff` field. For login forms specifically, use husk_login instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -60,7 +60,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_type",
-    description: "Husk — Type into a text field. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"email textbox\"; resolved via deterministic AX scoring). On ambiguous or unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\"}. Requires `text`. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead.",
+    description: "Husk — Type into a text field. STRONGLY PREFER {intent} (e.g. \"search box\", \"email field\") over {stable_id}. Resolved via deterministic AX scoring; passes the snapshot field name verbatim if it appeared in a snapshot. On ambiguous/unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\", candidates:[...]}. Requires `text`. Watchdog-protected. Result includes a `diff` field. IMPORTANT: does NOT work for password inputs on the bundled lightpanda engine — for ANY login flow (username + password + submit), use `husk_login` instead.",
     inputSchema: {
       type: "object",
       properties: {
