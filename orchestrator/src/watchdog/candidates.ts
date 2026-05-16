@@ -61,6 +61,7 @@ const VERB_ROLE_HINT: Record<Verb, string[] | null> = {
   type: ["textbox", "combobox", "searchbox"],
   scroll: null,
   press_key: null,
+  upload: null,
 };
 
 /**

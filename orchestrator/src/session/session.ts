@@ -467,7 +467,7 @@ export class Session {
       return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
     }
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target" };
+      return { ok: false, reason: "missing_target", candidates: [] };
     }
     return this.performUpload(resolved.stable_id, fileSpec);
   }
