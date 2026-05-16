@@ -18,6 +18,7 @@ class Session:
     def __init__(self, client: JsonRpcClient, session_id: str) -> None:
         self._client = client
         self._id = session_id
+        self.watch_url: Optional[str] = None
 
     @property
     def id(self) -> str:
@@ -32,8 +33,8 @@ class Session:
 
     async def click(
         self,
-        *,
         stable_id: Optional[str] = None,
+        *,
         intent: Optional[str] = None,
     ) -> ActionResult:
         """Click an element. Pass either ``stable_id`` (exact, from snapshot) or
@@ -52,13 +53,13 @@ class Session:
 
     async def type(
         self,
+        stable_id: Optional[str],
         text: str,
         *,
-        stable_id: Optional[str] = None,
         intent: Optional[str] = None,
     ) -> ActionResult:
-        """Type into a text field. Pass either ``stable_id`` or ``intent`` to
-        identify the target, plus ``text`` to type.
+        """Type into a text field. Pass ``stable_id`` (or ``None`` for
+        intent-based targeting) and ``text`` to type.
 
         On ambiguous or unresolved intent returns an error envelope.
         """
@@ -72,22 +73,21 @@ class Session:
 
     async def scroll(
         self,
+        stable_id: Optional[str],
         direction: ScrollDirection,
         amount: int,
         *,
-        stable_id: Optional[str] = None,
         intent: Optional[str] = None,
     ) -> ActionResult:
         """Scroll the page or an element. Pass ``stable_id`` (may be ``None``
-        for window scroll), ``intent``, or neither for a plain window scroll.
+        for window scroll), ``direction``, and ``amount``.
         """
         params: dict[str, Any] = {
             "session_id": self._id,
+            "stable_id": stable_id,
             "direction": direction,
             "amount": amount,
         }
-        if stable_id is not None:
-            params["stable_id"] = stable_id
         if intent is not None:
             params["intent"] = intent
         raw = await self._client.call("scroll", params)
