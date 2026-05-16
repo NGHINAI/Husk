@@ -31,7 +31,7 @@ describe("runFind", () => {
     expect(r.candidates[0].role).toBe("textbox");
   });
 
-  it("returns ok:false when nothing scores above threshold (0.5)", async () => {
+  it("returns ok:false when nothing scores above threshold (0.55)", async () => {
     const r = await runFind({ snapshot, cache: null }, { intent: "checkout cart total" });
     expect(r.ok).toBe(false);
     expect(r.candidates).toEqual([]);

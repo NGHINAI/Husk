@@ -50,7 +50,10 @@ export type RejectionReason =
   | "wrong_role_for_action"
   | "policy_forbidden"
   | "policy_required_before"
-  | "policy_domain_denied";
+  | "policy_domain_denied"
+  | "no_match"
+  | "ambiguous_intent"
+  | "missing_target";
 
 export interface RejectionEnvelope {
   ok: false;
