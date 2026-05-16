@@ -553,6 +553,65 @@ M11 fixes this with two surfaces:
 
 ---
 
+### 5.8 Dynamic Workflow Primitives + Watch UI (M13 — shipped 2026-05-16)
+
+#### Motivation
+
+Through M11, Husk could navigate, snapshot, click/type/scroll, persist cookies, log in with TOTP, batch-visit, and extract single CSS selectors. To handle *any* workflow — dynamic-form job applications, multi-field captures, intent-routed actions, file uploads, page-readiness — five primitives were missing. M13 adds them while *reducing* MCP surface bloat through fold-in.
+
+#### Surface change
+
+Net **+2 MCP tools** (not +5 as originally scoped):
+- `husk_wait_for` (new)
+- `husk_upload` (new)
+- `find()` folded into `click`/`type`/`scroll`/`upload` via `{intent}`
+- `capture` folded into existing `husk_extract` via `{selectors}`
+- `watch_url` folded into existing `husk_create_session` response
+
+#### Primitives
+
+**`husk_wait_for({session_id, ...condition, timeout_ms?})`** — Poll until one condition is true:
+- `text: string` — substring match against any AX node name
+- `role + name: string` — exact match (both required)
+- `url_matches: string` — regex against current URL
+- `network_idle: number` — N ms since last `performance.getEntriesByType("resource")` entry
+- `selector_visible: string` — CSS selector with non-zero bbox + visibility:visible + display!=none
+
+Default `timeout_ms = 10_000`. Poll interval 100ms. Returns `{ok, condition_met?, reason?, waited_ms, stable_id?}`. Throws on no-condition.
+
+**Intent-routed actions** — `husk_click`/`husk_type`/`husk_scroll`/`husk_upload` now accept EITHER `{stable_id}` OR `{intent: "..."}`. Internal resolver is deterministic Jaro-Winkler + token-best composite over the AX tree; threshold 0.55; top-3 candidates. Ambiguity (top-2 within 0.05) returns watchdog-style envelope `{ok:false, reason:"ambiguous_intent", candidates}`. No-match: `reason:"no_match"`.
+
+**`husk_upload({session_id, stable_id|intent, file_path | content_base64+filename})`** — Routes through M5 watchdog, then CDP `DOM.setFileInputFiles`. `filename` is `basename`-stripped to prevent traversal. Tempfile cleanup deferred (TODO M14: clean on session.close).
+
+**Multi-selector `husk_extract({session_id, css | selectors})`** — `{selectors: {k: css}}` returns `{k: text|null}` in ONE `Runtime.evaluate` round-trip; each key wrapped in try/catch.
+
+**Page-ready (no surface change)** — `goto` now resolves on `Page.loadEventFired` + 500ms network-idle (max-wait 8s), replacing the M9 fixed `setTimeout(1500)`.
+
+#### Watch UI
+
+When the orchestrator is bound to 127.0.0.1, three things happen:
+1. `GET /watch` serves a single-file HTML viewer (~7KB; AX tree left, color-coded event log right; GitHub-dark aesthetic).
+2. `GET /watch/stream/:session_id` opens an SSE stream of `{snapshot, action, rejection, navigation, find}` events.
+3. `husk_create_session` returns `{session_id, watch_url}`. Agents proactively offer the URL with prompts like "want to watch what I'm seeing?".
+
+When bound to `0.0.0.0` (or anything non-localhost), `/watch` and `/watch/stream/*` are NOT registered, and `watch_url` is `null`. Defense in depth: no remote attack surface.
+
+#### Decisions
+
+**Decision L — Watch UI is local-only by design.** No token auth, no remote bind. Rationale: the only safe demoable surface is one that lives on the developer's loopback. Anything else needs auth, which dramatically complicates the "want to watch what I'm seeing?" flow.
+
+**Decision M — `find()` is deterministic-only.** No LLM in the resolver path. Husk's LLM-neutrality is load-bearing for AGPL+MIT licensing and for sub-millisecond latency. Plug-in semantic resolvers are an opt-in escape hatch for M14+, not a default.
+
+**Decision N — Tool-surface fold-in rule.** New capability adds a new MCP tool only when the verb is genuinely distinct (`wait_for`, `upload`). Capability variants of existing verbs (intent vs stable_id, single vs multi-selector, watch-url discovery) MUST fold into the existing tool's parameter space. This rule prevents AI-agent decision fatigue at the tool-choice layer.
+
+#### Limitations
+
+- Lightpanda does not implement CDP `DOM.setFileInputFiles` (returns `-31998: UnknownMethod`). The unit tests verify the orchestrator's CDP-call shape; the integration test detects and logs the gap rather than failing. M12 (Chrome adapter) resolves this.
+- Lightpanda's AX tree does not promote `textContent` changes without `aria-label` updates. Workflows requiring dynamic content matching via `wait_for(text)` should target elements with stable `aria-label`s, or use `selector_visible` instead.
+- Tempfiles from `husk_upload` base64 mode are not auto-cleaned. macOS does not sweep `/tmp` on reboot. M14 backlog: clean on session.close.
+
+---
+
 ## 6. Developer Experience — How Agents Access Husk
 
 Four interfaces. All v0. All routed through the same JSON-RPC orchestrator.

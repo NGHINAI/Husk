@@ -174,6 +174,20 @@ rely on (e.g. GitHub's repo description div is React-rendered and won't be visib
 via `extract` against lightpanda). For those targets, use server-rendered selectors
 like `meta[name='description']` or wait for the Chrome adapter (v0.1+).
 
+## Dynamic workflows (M13)
+
+Husk now handles *any* workflow:
+
+- **`husk_wait_for`** — wait for text, role+name, URL regex, network-idle, or CSS visibility (10s default timeout)
+- **Intent-routed actions** — `husk_click`/`husk_type`/`husk_scroll`/`husk_upload` accept `{intent: "sign in button"}` instead of `{stable_id}`; deterministic AX resolution, ambiguity returns candidates
+- **`husk_upload`** — `file_path` or `content_base64+filename` → `DOM.setFileInputFiles` (path-traversal sanitized)
+- **Multi-selector `husk_extract`** — `{selectors: {price: ".price", title: "h1"}}` → one round-trip, returns `{key: text|null}` map
+- **Page-readiness** — `goto` resolves on real `loadEventFired` + network-idle, not a fixed delay
+
+### Watch UI
+
+When `husk start` binds to 127.0.0.1, the orchestrator serves a live viewer at `http://127.0.0.1:PORT/watch`. `create_session` returns `{session_id, watch_url}` so agents can proactively offer the URL: "want to watch what I'm seeing?". Live AX tree on the left, color-coded event log on the right. No external assets, no framework.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing
