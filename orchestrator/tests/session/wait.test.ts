@@ -50,6 +50,18 @@ describe("runWaitFor", () => {
     const session = makeFakeSession({});
     await expect(runWaitFor(session, { timeout_ms: 1000 } as never)).rejects.toThrow(/condition/);
   });
+
+  it("resolves network_idle via Runtime.evaluate", async () => {
+    const session = makeFakeSession({ evalResults: [null, "idle"] });
+    const r = await runWaitFor(session, { network_idle: 300, timeout_ms: 1000 });
+    expect(r.ok).toBe(true);
+    expect(r.condition_met).toBe("network_idle");
+  });
+
+  it("rejects when role is given without name", async () => {
+    const session = makeFakeSession({});
+    await expect(runWaitFor(session, { role: "button", timeout_ms: 1000 } as never)).rejects.toThrow(/condition/);
+  });
 });
 
 function makeFakeSession(opts: {

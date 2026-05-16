@@ -24,8 +24,8 @@ interface SessionLike {
 const POLL_MS = 100;
 
 export async function runWaitFor(session: SessionLike, c: WaitForCondition): Promise<WaitForResult> {
-  if (!c.text && !c.role && !c.url_matches && c.network_idle === undefined && !c.selector_visible) {
-    throw new Error("husk_wait_for: at least one condition required (text, role+name, url_matches, network_idle, selector_visible)");
+  if (!c.text && !(c.role && c.name) && !c.url_matches && c.network_idle === undefined && !c.selector_visible) {
+    throw new Error("husk_wait_for: at least one condition required (text, role+name both required, url_matches, network_idle, selector_visible)");
   }
   const timeout = c.timeout_ms ?? 10_000;
   const start = Date.now();
