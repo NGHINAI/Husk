@@ -10,6 +10,7 @@ import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
 import { runExtract, type ExtractQuery } from "./extract.js";
 import { runWaitFor, type WaitForCondition, type WaitForResult } from "./wait.js";
+import { runUpload, type UploadResult } from "./upload.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
 import { VaultStore } from "../vault/store.js";
 import { captureCookies } from "../vault/capture.js";
@@ -297,6 +298,27 @@ export class Session {
     };
   }
 
+  private async performUpload(
+    stable_id: string,
+    fileSpec: { file_path?: string; content_base64?: string; filename?: string }
+  ): Promise<UploadResult> {
+    const before = await this.snapshot();
+    const pre = this.watchdog.evaluatePre(before, "upload", stable_id);
+    if (!pre.ok) {
+      return { ok: false, reason: pre.envelope.reason };
+    }
+    if (pre.backendNodeId == null) {
+      return { ok: false, reason: "element_not_found" };
+    }
+    return runUpload({
+      cdp: {
+        send: (method: string, params: unknown) =>
+          this.cdp.send(method as string, params as Record<string, unknown>, this.sessionId),
+      },
+      resolveBackendNodeId: async (_sid: string) => pre.backendNodeId!,
+    }, { stable_id, ...fileSpec });
+  }
+
   // ---------------------------------------------------------------------------
   // Public action methods — accept Target (stable_id | intent) or plain string.
   // ---------------------------------------------------------------------------
@@ -374,6 +396,29 @@ export class Session {
       }),
       diff: diffSnapshots(before, after),
     };
+  }
+
+  /**
+   * Upload a file to an `<input type="file">` element.
+   * Pass `{ stable_id }` or `{ intent }` to target the file input.
+   * File contents come from EITHER `{ file_path }` (path on disk) OR
+   * `{ content_base64, filename }` (base64-encoded bytes with a suggested name).
+   * Routes through the M5 watchdog — rejects if the element is not found or
+   * is disabled.
+   */
+  async upload(
+    target: Target | string,
+    fileSpec: { file_path?: string; content_base64?: string; filename?: string },
+  ): Promise<UploadResult & { candidates?: FindCandidate[] }> {
+    const t: Target = typeof target === "string" ? { stable_id: target } : target;
+    const resolved = await this.resolveTarget(t);
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+    }
+    if (resolved.stable_id == null) {
+      return { ok: false, reason: "missing_target" };
+    }
+    return this.performUpload(resolved.stable_id, fileSpec);
   }
 
   async login(input: LoginInput & { totp_secret?: string }): Promise<LoginResult> {
@@ -667,3 +712,4 @@ async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
 export type { LoginInput, LoginResult } from "../auth/login-flow.js";
 export type { ExtractQuery } from "./extract.js";
 export type { WaitForCondition, WaitForResult } from "./wait.js";
+export type { UploadResult } from "./upload.js";

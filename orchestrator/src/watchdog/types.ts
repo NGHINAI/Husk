@@ -1,8 +1,8 @@
 /**
- * The four verbs the watchdog gates. Matches the HTTP method names
+ * The verbs the watchdog gates. Matches the HTTP method names
  * exposed at /v1/jsonrpc.
  */
-export type Verb = "click" | "type" | "scroll" | "press_key";
+export type Verb = "click" | "type" | "scroll" | "press_key" | "upload";
 
 /** One candidate returned alongside an `element_not_found` rejection. */
 export interface Candidate {

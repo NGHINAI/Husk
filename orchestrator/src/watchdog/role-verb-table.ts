@@ -24,6 +24,14 @@ const CLICK_ROLES = new Set([
 
 const TYPE_ROLES = new Set(["textbox", "combobox", "searchbox"]);
 
+// File inputs in the AX tree may appear as "textbox", "spinbutton", "unknown",
+// or in some engines simply as a generic element. We accept any role for upload
+// since lightpanda's AX representation of <input type="file"> is not guaranteed
+// to produce a predictable role — the CDP DOM.setFileInputFiles path is the
+// authoritative gate, and the element-existence check in the watchdog pre-sanity
+// is sufficient to confirm the stable_id is valid.
+const UPLOAD_ROLES_OPEN = true;
+
 export function isRoleVerbCompatible(role: string, verb: Verb): boolean {
   switch (verb) {
     case "click":
@@ -32,6 +40,11 @@ export function isRoleVerbCompatible(role: string, verb: Verb): boolean {
       return TYPE_ROLES.has(role);
     case "scroll":
     case "press_key":
+      return true;
+    case "upload":
+      // Accept any role — lightpanda may expose <input type="file"> with varied
+      // roles. The CDP DOM.setFileInputFiles call is the functional gate.
+      void UPLOAD_ROLES_OPEN;
       return true;
   }
 }

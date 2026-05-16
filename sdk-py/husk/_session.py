@@ -172,5 +172,35 @@ class Session:
             params["timeout_ms"] = timeout_ms
         return await self._client.call("wait_for", params)
 
+    async def upload(
+        self,
+        *,
+        stable_id: Optional[str] = None,
+        intent: Optional[str] = None,
+        file_path: Optional[str] = None,
+        content_base64: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> dict:
+        """Upload a file to an ``<input type="file">`` element.
+
+        Pass either ``stable_id`` (exact, from snapshot) or ``intent``
+        (natural language) to target the input. File contents come from
+        EITHER ``file_path`` (path on disk) OR ``content_base64`` + ``filename``.
+
+        Returns a dict with ``ok`` and optional ``reason``/``candidates``.
+        """
+        params: dict[str, Any] = {"session_id": self._id}
+        if stable_id is not None:
+            params["stable_id"] = stable_id
+        if intent is not None:
+            params["intent"] = intent
+        if file_path is not None:
+            params["file_path"] = file_path
+        if content_base64 is not None:
+            params["content_base64"] = content_base64
+        if filename is not None:
+            params["filename"] = filename
+        return await self._client.call("upload", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

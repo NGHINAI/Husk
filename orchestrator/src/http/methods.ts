@@ -258,6 +258,24 @@ export const METHODS = {
     const { session_id: _sid, ...cond } = params;
     return session.waitFor(cond);
   },
+
+  async upload(
+    params: {
+      session_id: string;
+      stable_id?: string;
+      intent?: string;
+      file_path?: string;
+      content_base64?: string;
+      filename?: string;
+    },
+    ctx: MethodContext
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return session.upload(
+      { stable_id: params.stable_id, intent: params.intent },
+      { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
+    );
+  },
 } as const;
 
 /** Type-level enumeration of all method names. */

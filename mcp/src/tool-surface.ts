@@ -218,6 +218,22 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id"],
     },
   },
+  {
+    name: "husk_upload",
+    description: "Upload a file to a <input type=\"file\"> element. Pass EITHER {stable_id} OR {intent} to target the input. File contents come from EITHER {file_path} (absolute or relative path) OR {content_base64, filename}. Routes through the watchdog (rejects if the element isn't found or is disabled). Returns {ok, reason?, candidates?}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        stable_id: { type: "string" },
+        intent: { type: "string" },
+        file_path: { type: "string" },
+        content_base64: { type: "string" },
+        filename: { type: "string" },
+      },
+      required: ["session_id"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -237,6 +253,7 @@ const RPC_MAP: Record<string, string> = {
   husk_extract: "extract",
   husk_batch_visit: "batch_visit",
   husk_wait_for: "wait_for",
+  husk_upload: "upload",
 };
 
 const VERSION = "0.0.0";

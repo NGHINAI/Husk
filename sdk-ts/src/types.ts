@@ -183,3 +183,9 @@ export interface WaitForResult {
   waited_ms: number;
   stable_id?: string;
 }
+
+export interface UploadResult {
+  ok: boolean;
+  reason?: string;
+  candidates?: Candidate[];
+}

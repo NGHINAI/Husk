@@ -6,6 +6,7 @@ import type {
   LoginResult,
   WaitForCondition,
   WaitForResult,
+  UploadResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -77,6 +78,18 @@ export class Session {
 
   async waitFor(c: WaitForCondition): Promise<WaitForResult> {
     return await this.client.call<WaitForResult>("wait_for", { session_id: this.id, ...c });
+  }
+
+  /**
+   * Upload a file to an `<input type="file">` element.
+   * Pass `{ stable_id }` or `{ intent }` to target the input.
+   * File contents come from EITHER `{ file_path }` OR `{ content_base64, filename }`.
+   */
+  async upload(
+    target: { stable_id?: string; intent?: string },
+    fileSpec: { file_path?: string; content_base64?: string; filename?: string },
+  ): Promise<UploadResult> {
+    return await this.client.call<UploadResult>("upload", { session_id: this.id, ...target, ...fileSpec });
   }
 
   async close(): Promise<void> {
