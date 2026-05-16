@@ -222,7 +222,11 @@ class Session:
         if css is None and selectors is None:
             raise ValueError("extract requires either 'css' or 'selectors'")
         result = await self._client.call("extract", params)
-        return result.get("result") or result.get("text") or result
+        if "result" in result:
+            return result["result"]
+        if "text" in result:
+            return result["text"]
+        return result
 
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

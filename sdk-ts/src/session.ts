@@ -98,6 +98,8 @@ export class Session {
    * OR {selectors: {key: css}} for multi-field extraction (returns {key: text|null}).
    * Multi-selector mode completes in one round-trip.
    */
+  async extract(input: { css: string }): Promise<string | null>;
+  async extract(input: { selectors: Record<string, string> }): Promise<Record<string, string | null>>;
   async extract(
     input: { css: string } | { selectors: Record<string, string> }
   ): Promise<string | null | Record<string, string | null>> {
