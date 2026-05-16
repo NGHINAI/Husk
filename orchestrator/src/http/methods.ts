@@ -4,6 +4,7 @@ import { InvalidUrlError } from "./errors.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
+import type { WaitForCondition, WaitForResult } from "../session/wait.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -247,6 +248,15 @@ export const METHODS = {
   ): Promise<{ results: BatchVisitItem[] }> {
     const results = await batchVisit(ctx, params);
     return { results };
+  },
+
+  async wait_for(
+    params: { session_id: string } & WaitForCondition,
+    ctx: MethodContext
+  ): Promise<WaitForResult> {
+    const session = ctx.sessions.get(params.session_id);
+    const { session_id: _sid, ...cond } = params;
+    return session.waitFor(cond);
   },
 } as const;
 

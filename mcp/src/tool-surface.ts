@@ -197,6 +197,24 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["urls"],
     },
   },
+  {
+    name: "husk_wait_for",
+    description: "Wait until a condition is true on the page. Conditions (pass at least one): text (substring in any visible node name), role+name (exact role + exact name), url_matches (regex against current URL), network_idle (ms of zero in-flight requests), selector_visible (CSS selector visible). Default timeout 10s. Returns {ok, condition_met, waited_ms, stable_id?}. Cheap to call — polls every 100ms locally.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        text: { type: "string" },
+        role: { type: "string" },
+        name: { type: "string" },
+        url_matches: { type: "string" },
+        network_idle: { type: "number" },
+        selector_visible: { type: "string" },
+        timeout_ms: { type: "number" },
+      },
+      required: ["session_id"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -215,6 +233,7 @@ const RPC_MAP: Record<string, string> = {
   husk_credentials_set: "credentials_set",
   husk_extract: "extract",
   husk_batch_visit: "batch_visit",
+  husk_wait_for: "wait_for",
 };
 
 const VERSION = "0.0.0";

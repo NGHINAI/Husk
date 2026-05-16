@@ -6,6 +6,8 @@ from typing import Any, Literal, Optional
 from ._transport import JsonRpcClient
 from ._types import ActionResult, Snapshot, parse_action_result, parse_snapshot
 
+WaitForResult = dict[str, Any]
+
 
 ScrollDirection = Literal["up", "down", "left", "right", "into_view"]
 
@@ -81,6 +83,46 @@ class Session:
                 "or (profile, key)"
             )
         return await self._client.call("login", params)
+
+    async def wait_for(
+        self,
+        *,
+        text: Optional[str] = None,
+        role: Optional[str] = None,
+        name: Optional[str] = None,
+        url_matches: Optional[str] = None,
+        network_idle: Optional[int] = None,
+        selector_visible: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> WaitForResult:
+        """Wait until a condition is true on the page.
+
+        Pass at least one condition:
+        - ``text``: substring present in any visible node name.
+        - ``role`` + ``name``: exact role + exact accessible name.
+        - ``url_matches``: regex matched against the current URL.
+        - ``network_idle``: milliseconds of zero in-flight network requests.
+        - ``selector_visible``: CSS selector whose element is visible.
+
+        Default timeout is 10 seconds. Returns a dict with ``ok``,
+        ``condition_met``, ``waited_ms``, and optional ``stable_id``.
+        """
+        params: dict[str, Any] = {"session_id": self._id}
+        if text is not None:
+            params["text"] = text
+        if role is not None:
+            params["role"] = role
+        if name is not None:
+            params["name"] = name
+        if url_matches is not None:
+            params["url_matches"] = url_matches
+        if network_idle is not None:
+            params["network_idle"] = network_idle
+        if selector_visible is not None:
+            params["selector_visible"] = selector_visible
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+        return await self._client.call("wait_for", params)
 
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

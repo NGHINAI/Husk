@@ -9,6 +9,7 @@ import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
 import { runExtract, type ExtractQuery } from "./extract.js";
+import { runWaitFor, type WaitForCondition, type WaitForResult } from "./wait.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
 import { VaultStore } from "../vault/store.js";
 import { captureCookies } from "../vault/capture.js";
@@ -379,6 +380,30 @@ export class Session {
     return await runExtract(this.cdp, this.sessionId, query);
   }
 
+  async waitFor(c: WaitForCondition): Promise<WaitForResult> {
+    return runWaitFor({
+      snapshot: async (o) => {
+        const snap = await this.snapshot(o);
+        // Flatten the tree snapshot into the { url, nodes } shape that runWaitFor uses.
+        const nodes: Array<{ i: string; r: string; n: string }> = [];
+        const walk = (node: import("../snapshot/types.js").SnapshotNode) => {
+          nodes.push({ i: node.i, r: node.r, n: node.n });
+          for (const child of node.c ?? []) walk(child);
+        };
+        walk(snap.root);
+        return { url: snap.url, nodes };
+      },
+      runtimeEval: async (expr: string) => {
+        const r = await this.cdp.send(
+          "Runtime.evaluate",
+          { expression: expr, returnByValue: true },
+          this.sessionId
+        ) as { result?: { value?: unknown } };
+        return r.result?.value;
+      },
+    }, c);
+  }
+
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close();
@@ -520,3 +545,4 @@ async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {
 
 export type { LoginInput, LoginResult } from "../auth/login-flow.js";
 export type { ExtractQuery } from "./extract.js";
+export type { WaitForCondition, WaitForResult } from "./wait.js";

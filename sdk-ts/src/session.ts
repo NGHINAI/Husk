@@ -4,6 +4,8 @@ import type {
   Snapshot,
   SnapshotDiff,
   LoginResult,
+  WaitForCondition,
+  WaitForResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -64,6 +66,10 @@ export class Session {
       session_id: this.id,
       ...args,
     });
+  }
+
+  async waitFor(c: WaitForCondition): Promise<WaitForResult> {
+    return await this.client.call<WaitForResult>("wait_for", { session_id: this.id, ...c });
   }
 
   async close(): Promise<void> {

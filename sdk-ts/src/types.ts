@@ -160,3 +160,23 @@ export type LoginReason =
 export type LoginResult =
   | { ok: true; url_before: string; url_after: string }
   | { ok: false; reason: LoginReason; key?: string; detail?: unknown };
+
+// ----- husk_wait_for types -----
+
+export interface WaitForCondition {
+  text?: string;
+  role?: string;
+  name?: string;
+  url_matches?: string;
+  network_idle?: number;
+  selector_visible?: string;
+  timeout_ms?: number;
+}
+
+export interface WaitForResult {
+  ok: boolean;
+  condition_met?: "text" | "role_name" | "url_matches" | "network_idle" | "selector_visible";
+  reason?: "timeout";
+  waited_ms: number;
+  stable_id?: string;
+}
