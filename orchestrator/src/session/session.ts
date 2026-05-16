@@ -54,6 +54,9 @@ export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff |
 export class Session {
   private lastSnapshotAt = 0;
   private lastSnapshotMode: "full" | "terse" = "full";
+  /** networkIdleMs passed to waitForPageReady. Production default: 500.
+   *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
+  private networkIdleMs = 500;
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -126,7 +129,7 @@ export class Session {
     // Resolves when Page.loadEventFired fires AND in-flight requests are gone for
     // 500 ms, or after a hard 8-second cap (max_wait fallback).
     // Requires Page.enable + Network.enable to be called during session init.
-    await waitForPageReady(this.cdp, { networkIdleMs: 500, maxWaitMs: 8000 });
+    await waitForPageReady(this.cdp, { networkIdleMs: this.networkIdleMs, maxWaitMs: 8000 });
     // Eager snapshot: cache lastSnapshot so the agent's next snapshot() call is instant.
     // Use force:true so navigation always fetches a fresh AX tree (not a stale cache).
     // Best-effort: don't fail goto if AX capture has a transient issue.
@@ -463,7 +466,7 @@ export interface SessionInjected {
   // returns a valid DOM.getBoxModel response.
   const fakeWatchdog = new Watchdog();
 
-  return new (Session as unknown as new (
+  const inst = new (Session as unknown as new (
     engine: unknown,
     cdp: unknown,
     sessionId: string,
@@ -484,6 +487,11 @@ export interface SessionInjected {
     i.vault ?? null,
     i.profile ?? null
   );
+  // fromInjected stubs fire Page.loadEventFired instantly with no inflight
+  // requests, so the 500 ms idle window is unnecessary — opt into 0 ms so
+  // unit tests using goto() don't pay the penalty per call.
+  (inst as unknown as { networkIdleMs: number }).networkIdleMs = 0;
+  return inst;
 };
 
 async function resolveBrowserWsUrl(cdpBaseUrl: string): Promise<string | null> {

@@ -28,6 +28,16 @@ describe("waitForPageReady", () => {
     expect(r.reason).toBe("network_idle");
     expect(r.waitedMs).toBeGreaterThanOrEqual(400);
   });
+
+  it("resolves with zero-network-activity load (no requests at all)", async () => {
+    const cdp = makeFakeCdp();
+    const p = waitForPageReady(cdp, { networkIdleMs: 150, maxWaitMs: 5000 });
+    cdp.emit("Page.loadEventFired", {});
+    const r = await p;
+    expect(r.reason).toBe("network_idle");
+    expect(r.waitedMs).toBeGreaterThanOrEqual(150);
+    expect(r.waitedMs).toBeLessThan(500);
+  });
 });
 
 function makeFakeCdp() {
