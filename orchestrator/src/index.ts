@@ -12,6 +12,7 @@ import { SiteGraphCache } from "./cache/site-graph.js";
 import type { PolicyDocument } from "./watchdog/types.js";
 import { EnginePool } from "./engine/pool.js";
 import { locateLightpanda } from "./engine/binary.js";
+import { WatchBus } from "./watch/sse.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -155,6 +156,9 @@ async function runServer(args: StartArgs): Promise<void> {
   });
   await pool.ready();
 
+  // Watch event bus: per-session in-memory pub/sub for the /watch/stream SSE route.
+  const watchBus = new WatchBus();
+
   const sessions = new SessionManager(async (opts) => {
     const engineHandle = await pool.acquire();
     try {
@@ -164,6 +168,8 @@ async function runServer(args: StartArgs): Promise<void> {
         vault,
         profile: opts?.profile,
         engine: engineHandle,
+        watchBus: opts?.watchBus,
+        watchSessionId: opts?.watchSessionId,
       });
       if (defaultPolicy) session.setPolicy(defaultPolicy);
       return session;
@@ -172,7 +178,7 @@ async function runServer(args: StartArgs): Promise<void> {
       await engineHandle.release();
       throw e;
     }
-  });
+  }, watchBus);
 
   const server = await createHuskServer({
     port: args.port,
@@ -182,6 +188,7 @@ async function runServer(args: StartArgs): Promise<void> {
     logLevel: args.logLevel,
     vault,
     credentials,
+    watchBus,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM

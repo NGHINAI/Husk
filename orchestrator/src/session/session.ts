@@ -19,6 +19,8 @@ import { performLogin, type LoginInput, type LoginResult } from "../auth/login-f
 import { totpCode } from "../auth/totp.js";
 import type { EngineHandle } from "../engine/pool.js";
 import { runFind, type FindCandidate } from "./find.js";
+import type { WatchBus } from "../watch/sse.js";
+import type { WatchEvent } from "../watch/events.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -38,6 +40,11 @@ export interface SessionOptions {
    *  uses this instead of spawning a fresh lightpanda. The handle's release()
    *  is invoked on Session.close(). */
   engine?: EngineHandle | null;
+  /** Optional watch event bus. When provided, the session emits navigation,
+   *  snapshot, action, rejection, and find events to the bus under its id. */
+  watchBus?: WatchBus;
+  /** The session id to use when emitting to the watch bus. Set by SessionManager. */
+  watchSessionId?: string;
 }
 
 /**
@@ -86,8 +93,17 @@ export class Session {
     private readonly watchdog: Watchdog,
     private readonly vault: VaultStore | null = null,
     private profile: string | null = null,
-    private readonly engineHandle: EngineHandle | null = null
+    private readonly engineHandle: EngineHandle | null = null,
+    private readonly watchBus: WatchBus | null = null,
+    private readonly watchId: string | null = null
   ) {}
+
+  /** Emit an event to the watch bus if one is wired. No-op otherwise. */
+  private emitWatch(event: WatchEvent): void {
+    if (this.watchBus && this.watchId) {
+      this.watchBus.emit(this.watchId, event);
+    }
+  }
 
   static async create(opts: SessionOptions = {}): Promise<Session> {
     let engineProcess: LightpandaProcess;
@@ -132,7 +148,9 @@ export class Session {
       opts.siteGraph ?? null, wd,
       opts.vault ?? null,
       opts.profile ?? null,
-      engineHandle
+      engineHandle,
+      opts.watchBus ?? null,
+      opts.watchSessionId ?? null
     );
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
@@ -143,6 +161,8 @@ export class Session {
   async goto(url: string): Promise<void> {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
+    // Emit navigation event.
+    this.emitWatch({ kind: "navigation", ts: Date.now(), url });
     // Wait for the page to reach a network-idle state instead of a fixed delay.
     // Resolves when Page.loadEventFired fires AND in-flight requests are gone for
     // 500 ms, or after a hard 8-second cap (max_wait fallback).
@@ -177,6 +197,8 @@ export class Session {
     this.lastSnapshotAt = Date.now();
     this.lastSnapshotMode = mode;
     this.siteGraph?.observe(snap);
+    // Emit snapshot event on cache miss only (not on freshness-cache hits).
+    this.emitWatch({ kind: "snapshot", ts: this.lastSnapshotAt, url: snap.url, node_count: snap.count, mode });
     return snap;
   }
 
@@ -213,6 +235,8 @@ export class Session {
     const snap = await this.snapshot();
     const flatNodes = flattenSnapshot(snap.root);
     const r = await runFind({ snapshot: { nodes: flatNodes }, cache: null }, { intent: t.intent });
+    // Emit find event — both on success and failure (read-only, before action attempts).
+    this.emitWatch({ kind: "find", ts: Date.now(), intent: t.intent, candidates: r.candidates });
     if (!r.ok) return { ok: false, reason: "no_match", candidates: r.candidates };
     if (
       r.candidates.length >= 2 &&
@@ -230,8 +254,12 @@ export class Session {
   private async performClick(stable_id: string): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "click", stable_id);
-    if (!pre.ok) return pre.envelope;
+    if (!pre.ok) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      return pre.envelope;
+    }
     if (pre.backendNodeId == null) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: "element_not_found", candidates: [] });
       return {
         ok: false,
         reason: "element_not_found",
@@ -245,20 +273,26 @@ export class Session {
     await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
-    return {
+    const result: ActionResult = {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "click", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
       diff: diffSnapshots(before, after),
     };
+    this.emitWatch({ kind: "action", ts: Date.now(), verb: "click", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    return result;
   }
 
   private async performType(stable_id: string, text: string): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "type", stable_id);
-    if (!pre.ok) return pre.envelope;
+    if (!pre.ok) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      return pre.envelope;
+    }
     if (pre.backendNodeId == null) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: "element_not_found", candidates: [] });
       return {
         ok: false,
         reason: "element_not_found",
@@ -272,30 +306,37 @@ export class Session {
     await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
-    return {
+    const result: ActionResult = {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "type", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
       diff: diffSnapshots(before, after),
     };
+    this.emitWatch({ kind: "action", ts: Date.now(), verb: "type", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    return result;
   }
 
   private async performScroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "scroll", stable_id);
-    if (!pre.ok) return pre.envelope;
+    if (!pre.ok) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "scroll", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      return pre.envelope;
+    }
     const urlBefore = this.currentUrl;
     await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
-    return {
+    const result: ActionResult = {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "scroll", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
       diff: diffSnapshots(before, after),
     };
+    this.emitWatch({ kind: "action", ts: Date.now(), verb: "scroll", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    return result;
   }
 
   private async performUpload(
@@ -305,19 +346,23 @@ export class Session {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "upload", stable_id);
     if (!pre.ok) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
       // TODO(M14): mirror click/type and return the full RejectionEnvelope (candidates + snapshot_at_attempt)
       return { ok: false, reason: pre.envelope.reason };
     }
     if (pre.backendNodeId == null) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: "element_not_found", candidates: [] });
       return { ok: false, reason: "element_not_found" };
     }
-    return runUpload({
+    const result = await runUpload({
       cdp: {
         send: (method: string, params: unknown) =>
           this.cdp.send(method as string, params as Record<string, unknown>, this.sessionId),
       },
       resolveBackendNodeId: async (_sid: string) => pre.backendNodeId!,
     }, { stable_id, ...fileSpec });
+    this.emitWatch({ kind: "action", ts: Date.now(), verb: "upload", stable_id, ok: result.ok });
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -385,18 +430,23 @@ export class Session {
   async press_key(key: string): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "press_key", null);
-    if (!pre.ok) return pre.envelope;
+    if (!pre.ok) {
+      this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "press_key", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      return pre.envelope;
+    }
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
-    return {
+    const result: ActionResult = {
       ok: true,
       warnings: this.watchdog.evaluatePost({
         verb: "press_key", before, after, urlBefore, urlAfter: this.currentUrl,
       }),
       diff: diffSnapshots(before, after),
     };
+    this.emitWatch({ kind: "action", ts: Date.now(), verb: "press_key", stable_id: null, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    return result;
   }
 
   /**
