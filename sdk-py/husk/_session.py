@@ -30,19 +30,67 @@ class Session:
         raw = await self._client.call("snapshot", {"session_id": self._id})
         return parse_snapshot(raw)
 
-    async def click(self, stable_id: str) -> ActionResult:
-        raw = await self._client.call("click", {"session_id": self._id, "stable_id": stable_id})
+    async def click(
+        self,
+        *,
+        stable_id: Optional[str] = None,
+        intent: Optional[str] = None,
+    ) -> ActionResult:
+        """Click an element. Pass either ``stable_id`` (exact, from snapshot) or
+        ``intent`` (natural language, e.g. ``"sign in button"``).
+
+        On ambiguous intent returns ``{ok: False, reason: "ambiguous_intent"}``.
+        On no match returns ``{ok: False, reason: "no_match"}``.
+        """
+        params: dict[str, Any] = {"session_id": self._id}
+        if stable_id is not None:
+            params["stable_id"] = stable_id
+        if intent is not None:
+            params["intent"] = intent
+        raw = await self._client.call("click", params)
         return parse_action_result(raw)
 
-    async def type(self, stable_id: str, text: str) -> ActionResult:
-        raw = await self._client.call("type", {"session_id": self._id, "stable_id": stable_id, "text": text})
+    async def type(
+        self,
+        text: str,
+        *,
+        stable_id: Optional[str] = None,
+        intent: Optional[str] = None,
+    ) -> ActionResult:
+        """Type into a text field. Pass either ``stable_id`` or ``intent`` to
+        identify the target, plus ``text`` to type.
+
+        On ambiguous or unresolved intent returns an error envelope.
+        """
+        params: dict[str, Any] = {"session_id": self._id, "text": text}
+        if stable_id is not None:
+            params["stable_id"] = stable_id
+        if intent is not None:
+            params["intent"] = intent
+        raw = await self._client.call("type", params)
         return parse_action_result(raw)
 
-    async def scroll(self, stable_id: Optional[str], direction: ScrollDirection, amount: int) -> ActionResult:
-        raw = await self._client.call(
-            "scroll",
-            {"session_id": self._id, "stable_id": stable_id, "direction": direction, "amount": amount},
-        )
+    async def scroll(
+        self,
+        direction: ScrollDirection,
+        amount: int,
+        *,
+        stable_id: Optional[str] = None,
+        intent: Optional[str] = None,
+    ) -> ActionResult:
+        """Scroll the page or an element. Pass ``stable_id`` (may be ``None``
+        for window scroll), ``intent``, or neither for a plain window scroll.
+        """
+        params: dict[str, Any] = {
+            "session_id": self._id,
+            "direction": direction,
+            "amount": amount,
+        }
+        if stable_id is not None:
+            params["stable_id"] = stable_id
+        if intent is not None:
+            params["intent"] = intent
+        raw = await self._client.call("scroll", params)
         return parse_action_result(raw)
 
     async def press_key(self, key: str) -> ActionResult:

@@ -11,6 +11,13 @@ import type {
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
 
 /**
+ * Target specifier for action methods. Pass EITHER `stable_id` (exact, from
+ * snapshot) OR `intent` (natural language, e.g. "sign in button").
+ * For scroll, `stable_id` may be null for window-level scroll.
+ */
+export type Target = { stable_id?: string | null; intent?: string };
+
+/**
  * Per-session API. One instance per session_id. All methods are thin
  * wrappers over the JSON-RPC server — no client-side state aside from
  * the id.
@@ -30,16 +37,16 @@ export class Session {
     return await this.client.call<SnapshotDiff | null>("snapshot_diff", { session_id: this.id });
   }
 
-  async click(stable_id: string): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("click", { session_id: this.id, stable_id });
+  async click(target: Target): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("click", { session_id: this.id, ...target });
   }
 
-  async type(stable_id: string, text: string): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("type", { session_id: this.id, stable_id, text });
+  async type(target: Target, text: string): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("type", { session_id: this.id, ...target, text });
   }
 
-  async scroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
-    return await this.client.call<ActionResult>("scroll", { session_id: this.id, stable_id, direction, amount });
+  async scroll(target: Target, direction: ScrollDirection, amount: number): Promise<ActionResult> {
+    return await this.client.call<ActionResult>("scroll", { session_id: this.id, ...target, direction, amount });
   }
 
   async pressKey(key: string): Promise<ActionResult> {

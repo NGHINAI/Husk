@@ -3,7 +3,7 @@ import { CdpClient } from "../engine/cdp-client.js";
 import { waitForPageReady } from "./page-ready.js";
 import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
-import type { AXNode, Snapshot, SnapshotDiff } from "../snapshot/types.js";
+import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -17,6 +17,7 @@ import { restoreCookies } from "../vault/restore.js";
 import { performLogin, type LoginInput, type LoginResult } from "../auth/login-flow.js";
 import { totpCode } from "../auth/totp.js";
 import type { EngineHandle } from "../engine/pool.js";
+import { runFind, type FindCandidate } from "./find.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -51,6 +52,21 @@ export interface SessionOptions {
  *   5. `session.close()` — disconnects and kills the subprocess.
  */
 export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
+
+/**
+ * Target specifier for action methods. Callers pass EITHER:
+ *   • `{ stable_id }` — exact id from a snapshot (bypasses find(), fastest path)
+ *   • `{ intent }`   — natural language (e.g. "sign in button"), resolved via
+ *                      the deterministic AX-scoring find() resolver
+ *
+ * For scroll, `stable_id` may be null to request window-level scroll.
+ */
+export type Target = { stable_id?: string | null; intent?: string };
+
+/** Extended action result that also covers intent-resolution failures. */
+export type ActionResultWithIntent =
+  | ActionResult
+  | { ok: false; reason: "no_match" | "ambiguous_intent" | "missing_target"; candidates: FindCandidate[] };
 
 export class Session {
   private lastSnapshotAt = 0;
@@ -174,7 +190,43 @@ export class Session {
     this.watchdog.setPolicy(policy);
   }
 
-  async click(stable_id: string): Promise<ActionResult> {
+  /**
+   * Resolve a Target to a concrete stable_id.
+   *
+   * If `stable_id` is present (even null for window-level scroll), returns it
+   * immediately without touching the AX tree.
+   *
+   * If `intent` is provided, fetches the current snapshot, flattens the tree,
+   * runs the deterministic find() scorer, and applies ambiguity detection:
+   *   - top candidate is clear (score gap ≥ 0.05 vs #2)  → ok:true
+   *   - top-2 are within 0.05 of each other              → ambiguous_intent
+   *   - no candidates above threshold                     → no_match
+   */
+  private async resolveTarget(t: Target): Promise<
+    | { ok: true; stable_id: string | null }
+    | { ok: false; reason: "no_match" | "ambiguous_intent" | "missing_target"; candidates: FindCandidate[] }
+  > {
+    if (t.stable_id !== undefined) return { ok: true, stable_id: t.stable_id ?? null };
+    if (!t.intent) return { ok: false, reason: "missing_target", candidates: [] };
+
+    const snap = await this.snapshot();
+    const flatNodes = flattenSnapshot(snap.root);
+    const r = await runFind({ snapshot: { nodes: flatNodes }, cache: null }, { intent: t.intent });
+    if (!r.ok) return { ok: false, reason: "no_match", candidates: r.candidates };
+    if (
+      r.candidates.length >= 2 &&
+      r.candidates[0].score - r.candidates[1].score < 0.05
+    ) {
+      return { ok: false, reason: "ambiguous_intent", candidates: r.candidates };
+    }
+    return { ok: true, stable_id: r.candidates[0].stable_id };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal perform* methods — take a resolved stable_id, run watchdog, dispatch.
+  // ---------------------------------------------------------------------------
+
+  private async performClick(stable_id: string): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "click", stable_id);
     if (!pre.ok) return pre.envelope;
@@ -201,7 +253,7 @@ export class Session {
     };
   }
 
-  async type(stable_id: string, text: string): Promise<ActionResult> {
+  private async performType(stable_id: string, text: string): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "type", stable_id);
     if (!pre.ok) return pre.envelope;
@@ -228,7 +280,7 @@ export class Session {
     };
   }
 
-  async scroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
+  private async performScroll(stable_id: string | null, direction: ScrollDirection, amount: number): Promise<ActionResult> {
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "scroll", stable_id);
     if (!pre.ok) return pre.envelope;
@@ -243,6 +295,68 @@ export class Session {
       }),
       diff: diffSnapshots(before, after),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public action methods — accept Target (stable_id | intent) or plain string.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Click an element. Pass `{ stable_id }` (exact, from snapshot) OR
+   * `{ intent }` (natural language like "sign in button", resolved via
+   * deterministic AX scoring).
+   *
+   * Also accepts a bare `string` for backwards-compatible call sites
+   * (e.g. internal login-flow). All new call sites should pass a Target object.
+   */
+  async click(target: Target | string): Promise<ActionResultWithIntent> {
+    const t: Target = typeof target === "string" ? { stable_id: target } : target;
+    const resolved = await this.resolveTarget(t);
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+    }
+    // resolved.stable_id is string | null; click always requires a real id.
+    if (resolved.stable_id == null) {
+      return { ok: false, reason: "missing_target", candidates: [] };
+    }
+    return this.performClick(resolved.stable_id);
+  }
+
+  /**
+   * Type into a text field. Pass `{ stable_id }` or `{ intent }` as the target.
+   *
+   * Also accepts a bare `string` stable_id for backwards compatibility.
+   */
+  async type(target: Target | string, text: string): Promise<ActionResultWithIntent> {
+    const t: Target = typeof target === "string" ? { stable_id: target } : target;
+    const resolved = await this.resolveTarget(t);
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+    }
+    if (resolved.stable_id == null) {
+      return { ok: false, reason: "missing_target", candidates: [] };
+    }
+    return this.performType(resolved.stable_id, text);
+  }
+
+  /**
+   * Scroll the page or an element. Pass `{ stable_id }` (may be null for
+   * window scroll), `{ intent }`, or a bare `string | null`.
+   */
+  async scroll(target: Target | string | null, direction: ScrollDirection, amount: number): Promise<ActionResultWithIntent> {
+    let t: Target;
+    if (target === null) {
+      t = { stable_id: null };
+    } else if (typeof target === "string") {
+      t = { stable_id: target };
+    } else {
+      t = target;
+    }
+    const resolved = await this.resolveTarget(t);
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+    }
+    return this.performScroll(resolved.stable_id, direction, amount);
   }
 
   async press_key(key: string): Promise<ActionResult> {
@@ -384,14 +498,7 @@ export class Session {
     return runWaitFor({
       snapshot: async (o) => {
         const snap = await this.snapshot(o);
-        // Flatten the tree snapshot into the { url, nodes } shape that runWaitFor uses.
-        const nodes: Array<{ i: string; r: string; n: string }> = [];
-        const walk = (node: import("../snapshot/types.js").SnapshotNode) => {
-          nodes.push({ i: node.i, r: node.r, n: node.n });
-          for (const child of node.c ?? []) walk(child);
-        };
-        walk(snap.root);
-        return { url: snap.url, nodes };
+        return { url: snap.url, nodes: flattenSnapshot(snap.root) };
       },
       runtimeEval: async (expr: string) => {
         const r = await this.cdp.send(
@@ -438,6 +545,20 @@ export class Session {
 
 function waitForMutationWindow(): Promise<void> {
   return new Promise((r) => setTimeout(r, 500));
+}
+
+/**
+ * Flatten a snapshot tree into the { i, r, n } node array that runFind expects.
+ * Shared between resolveTarget() and waitFor().
+ */
+function flattenSnapshot(root: SnapshotNode): Array<{ i: string; r: string; n: string }> {
+  const nodes: Array<{ i: string; r: string; n: string }> = [];
+  const walk = (node: SnapshotNode) => {
+    nodes.push({ i: node.i, r: node.r, n: node.n });
+    for (const child of node.c ?? []) walk(child);
+  };
+  walk(root);
+  return nodes;
 }
 
 /**

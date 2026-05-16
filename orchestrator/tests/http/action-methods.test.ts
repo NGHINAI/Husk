@@ -35,20 +35,25 @@ describe("HTTP action methods", () => {
     await sm.closeAll();
   });
 
-  it("click forwards stable_id to Session.click", async () => {
+  it("click forwards stable_id as Target object to Session.click", async () => {
     const res = await METHODS.click({ session_id: sessionId, stable_id: "button:s" }, ctx);
-    expect(click).toHaveBeenCalledWith("button:s");
+    expect(click).toHaveBeenCalledWith({ stable_id: "button:s", intent: undefined });
     expect(res).toEqual({ ok: true, warnings: [] });
   });
 
-  it("type forwards stable_id + text", async () => {
-    await METHODS.type({ session_id: sessionId, stable_id: "textbox:e", text: "hello" }, ctx);
-    expect(type_).toHaveBeenCalledWith("textbox:e", "hello");
+  it("click forwards intent as Target object to Session.click", async () => {
+    await METHODS.click({ session_id: sessionId, intent: "sign in button" }, ctx);
+    expect(click).toHaveBeenCalledWith({ stable_id: undefined, intent: "sign in button" });
   });
 
-  it("scroll accepts null stable_id (window scroll)", async () => {
+  it("type forwards stable_id + text as Target object", async () => {
+    await METHODS.type({ session_id: sessionId, stable_id: "textbox:e", text: "hello" }, ctx);
+    expect(type_).toHaveBeenCalledWith({ stable_id: "textbox:e", intent: undefined }, "hello");
+  });
+
+  it("scroll accepts null stable_id (window scroll) as Target object", async () => {
     await METHODS.scroll({ session_id: sessionId, stable_id: null, direction: "down", amount: 300 }, ctx);
-    expect(scroll).toHaveBeenCalledWith(null, "down", 300);
+    expect(scroll).toHaveBeenCalledWith({ stable_id: null, intent: undefined }, "down", 300);
   });
 
   it("press_key forwards the key string", async () => {

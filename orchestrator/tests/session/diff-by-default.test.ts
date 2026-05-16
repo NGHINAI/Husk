@@ -53,7 +53,7 @@ describe("diff-by-default in action results", () => {
     expect(buttonId).toBeDefined();
 
     // Force a stale-cache miss so the post-action snapshot is fresh.
-    const result = await session.click(buttonId!);
+    const result = await session.click({ stable_id: buttonId! });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     expect(result.diff).toBeDefined();
@@ -74,7 +74,7 @@ describe("diff-by-default in action results", () => {
     };
     const session = Session.fromInjected({ engine: { close: async () => {} }, cdp, sessionId: "s1" });
     await session.goto("https://x.test/");
-    const result = await session.click("button:totally-fake");
+    const result = await session.click({ stable_id: "button:totally-fake" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("element_not_found");
@@ -115,7 +115,7 @@ describe("diff-by-default in action results", () => {
     const snap = await session.snapshot();
     const tb = snap.root.c?.find((c) => c.r === "textbox");
     expect(tb).toBeDefined();
-    const result = await session.type(tb!.i, "hello");
+    const result = await session.type({ stable_id: tb!.i }, "hello");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.diff).toBeDefined();

@@ -47,37 +47,40 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element by stable_id. Watchdog-protected. The result INCLUDES a `diff` field showing what changed in the page after the action ({added, removed, changed} nodes), so you typically don't need a separate snapshot after a click. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
+    description: "Husk — Click an element. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"sign in button\"; resolved via deterministic AX scoring). On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[...]}. On no match, returns {ok:false, reason:\"no_match\"}. Use stable_id when you have it; intent when you don't. Watchdog-protected. The result INCLUDES a `diff` field showing what changed after the action. For login forms specifically, use husk_login instead — many engines don't reliably handle programmatic clicks on form submit buttons.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: "string", description: "Stable id from a snapshot" },
+        stable_id: { type: "string", description: "Exact stable id from a snapshot. Use this when you have the id." },
+        intent: { type: "string", description: "Natural language description of the element to click, e.g. \"sign in button\" or \"submit form\". Resolved via deterministic AX scoring. Pass either stable_id or intent, not both." },
       },
-      required: ["session_id", "stable_id"],
+      required: ["session_id"],
     },
   },
   {
     name: "husk_type",
-    description: "Husk — Type into a text field by stable_id. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead — it handles the engine quirks and submits the form correctly.",
+    description: "Husk — Type into a text field. Pass EITHER {stable_id} (exact, from snapshot) OR {intent} (natural language like \"email textbox\"; resolved via deterministic AX scoring). On ambiguous or unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\"}. Requires `text`. Watchdog-protected. Result includes a `diff` field showing what changed after typing. IMPORTANT: This tool does NOT work for password inputs on the bundled lightpanda engine (the AX tree assigns role=none to <input type=password>). For ANY login flow (username + password + submit), use `husk_login` instead.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: "string" },
-        text: { type: "string" },
+        stable_id: { type: "string", description: "Exact stable id from a snapshot. Pass either stable_id or intent." },
+        intent: { type: "string", description: "Natural language description of the field, e.g. \"email textbox\". Pass either stable_id or intent." },
+        text: { type: "string", description: "Text to type into the field" },
       },
-      required: ["session_id", "stable_id", "text"],
+      required: ["session_id", "text"],
     },
   },
   {
     name: "husk_scroll",
-    description: "Husk — Scroll the page or an element into view. Result includes a `diff` field showing what's now visible.",
+    description: "Husk — Scroll the page or an element. Pass EITHER {stable_id} (exact, may be null for window scroll), {intent} (natural language like \"main content area\"), or omit both for a plain window scroll. On unresolved intent returns {ok:false, reason:\"no_match\"}. Result includes a `diff` field showing what's now visible.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
-        stable_id: { type: ["string", "null"], description: "Element to scroll into view, or null for window scroll" },
+        stable_id: { type: ["string", "null"], description: "Element stable id to scroll into view, or null for window scroll. Pass either stable_id or intent." },
+        intent: { type: "string", description: "Natural language description of the element to scroll, e.g. \"comments section\". Pass either stable_id or intent." },
         direction: { type: "string", enum: ["up", "down", "left", "right", "into_view"] },
         amount: { type: "number", description: "Pixels to scroll (ignored for into_view)" },
       },

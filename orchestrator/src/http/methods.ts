@@ -95,27 +95,27 @@ export const METHODS = {
   },
 
   async click(
-    params: { session_id: string; stable_id: string },
+    params: { session_id: string; stable_id?: string; intent?: string },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.click(params.stable_id);
+    return await session.click({ stable_id: params.stable_id, intent: params.intent });
   },
 
   async type(
-    params: { session_id: string; stable_id: string; text: string },
+    params: { session_id: string; stable_id?: string; intent?: string; text: string },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.type(params.stable_id, params.text);
+    return await session.type({ stable_id: params.stable_id, intent: params.intent }, params.text);
   },
 
   async scroll(
-    params: { session_id: string; stable_id: string | null; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
+    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.scroll(params.stable_id, params.direction, params.amount);
+    return await session.scroll({ stable_id: params.stable_id, intent: params.intent }, params.direction, params.amount);
   },
 
   async press_key(

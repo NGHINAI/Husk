@@ -25,7 +25,7 @@ integrationOrSkip("watchdog e2e — real lightpanda", () => {
       // Prime cache so candidates can be returned
       await session.snapshot();
 
-      const result = await session.click("button:totally-fake-id");
+      const result = await session.click({ stable_id: "button:totally-fake-id" });
       expect((result as { ok: boolean }).ok).toBe(false);
       const env = result as { ok: false; reason: string; candidates: Array<{ name: string }> };
       expect(env.reason).toBe("element_not_found");
@@ -53,7 +53,7 @@ integrationOrSkip("watchdog e2e — real lightpanda", () => {
       const button = findNode(snap.root, (n) => n.r === "button" && /submit/i.test(n.n));
       expect(button).toBeTruthy();
 
-      const result = await session.click(button!.i);
+      const result = await session.click({ stable_id: button!.i });
       // Tolerant: lightpanda may or may not expose backendDOMNodeId on every
       // node, may or may not fire DOM mutations. The watchdog should ALWAYS
       // return a structured response — never throw or hang.

@@ -79,7 +79,7 @@ integrationOrSkip("sdk e2e — real husk start", () => {
       await session.goto("https://example.com");
       await session.snapshot();
 
-      const result = await session.click("button:totally-fake");
+      const result = await session.click({ stable_id: "button:totally-fake" });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.reason).toBe("element_not_found");
