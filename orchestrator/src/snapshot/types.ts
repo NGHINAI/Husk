@@ -58,7 +58,9 @@ export interface SnapshotNode {
 
 /** M14: Forward-declared types for new Snapshot envelope fields (T2-T10). */
 export interface SnapshotNetwork {
-  [key: string]: unknown; // T2 + T10 will fill this in
+  /** Recent network requests captured via CDP (ring buffer, last 100 per session). */
+  recent: import("../session/network-buffer.js").NetworkEntry[];
+  // likely_api_endpoints added in T10
 }
 export interface FormSchema {
   [key: string]: unknown; // T5 will fill this in

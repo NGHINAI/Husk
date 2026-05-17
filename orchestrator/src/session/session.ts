@@ -5,6 +5,7 @@ import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
 import { computeSignature, type AxLite } from "../snapshot/signature.js";
+import { NetworkBuffer } from "./network-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -83,6 +84,8 @@ export class Session {
   /** networkIdleMs passed to waitForPageReady. Production default: 500.
    *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
   private networkIdleMs = 500;
+  /** Ring buffer of recent CDP Network events. Populated after Session.create(). */
+  private networkBuffer = new NetworkBuffer(100);
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -153,6 +156,35 @@ export class Session {
       opts.watchBus ?? null,
       opts.watchSessionId ?? null
     );
+
+    // Wire CDP Network events into the ring buffer.
+    // CDP timestamps are fractional seconds — multiply by 1000 to get ms.
+    cdp.on("Network.requestWillBeSent", (params: unknown) => {
+      const p = params as { requestId?: string; request?: { url?: string; method?: string }; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onRequest(p.requestId, {
+        url: p.request?.url ?? "",
+        method: p.request?.method ?? "GET",
+        startedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+    cdp.on("Network.responseReceived", (params: unknown) => {
+      const p = params as { requestId?: string; response?: { status?: number; mimeType?: string }; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onResponse(p.requestId, {
+        status: p.response?.status ?? 0,
+        mimeType: p.response?.mimeType ?? "",
+        completedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+    cdp.on("Network.loadingFailed", (params: unknown) => {
+      const p = params as { requestId?: string; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onFailed(p.requestId, {
+        completedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
     }
@@ -195,13 +227,14 @@ export class Session {
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
     const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode });
 
-    // M14 T1: Compute and attach state signature.
-    // networkUrls is populated by T2/T10; for now, empty list.
-    const networkUrls: string[] = [];
+    // M14 T2: Attach network ring buffer to snapshot.
+    snap.network = { recent: this.networkBuffer.recent() };
+
+    // M14 T1+T2: Compute state signature with actual network URLs.
     snap.signature = computeSignature({
       root: snap.root as unknown as AxLite,
       url: snap.url,
-      networkUrls,
+      networkUrls: this.networkBuffer.urls(),
     });
 
     this.lastSnapshot = snap;
