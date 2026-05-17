@@ -27,6 +27,8 @@ describe("applySchema", () => {
         "last_seen_at",
         "hit_count",
         "miss_count",
+        "success_count",
+        "failure_count",
       ].sort()
     );
   });

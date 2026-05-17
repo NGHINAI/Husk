@@ -115,6 +115,86 @@ export class SiteGraphCache {
     return stmt.all(params) as SiteGraphRow[];
   }
 
+  /**
+   * Record a successful action outcome for a selector.
+   * Increments `success_count` and updates `last_seen_at`. If no row exists
+   * for the (domain, stable_id) pair, a minimal row is inserted.
+   */
+  recordSuccess(domain: string, stable_id: string): void {
+    if (this.closed) throw new Error("SiteGraphCache: closed");
+    if (!isValidDomain(domain)) return;
+    const db = this.dbFor(domain);
+    const now = Date.now();
+    const updated = db
+      .prepare(
+        `UPDATE selectors SET success_count = success_count + 1, last_seen_at = ?
+         WHERE stable_id = ?`
+      )
+      .run(now, stable_id);
+    if (updated.changes === 0) {
+      db.prepare(
+        `INSERT OR IGNORE INTO selectors
+           (stable_id, role, name_norm, last_seen_at, success_count)
+         VALUES (?, '', '', ?, 1)`
+      ).run(stable_id, now);
+    }
+  }
+
+  /**
+   * Record a failed action outcome for a selector.
+   * Increments `failure_count`. If no row exists, a minimal row is inserted.
+   */
+  recordFailure(domain: string, stable_id: string): void {
+    if (this.closed) throw new Error("SiteGraphCache: closed");
+    if (!isValidDomain(domain)) return;
+    const db = this.dbFor(domain);
+    const now = Date.now();
+    const updated = db
+      .prepare(
+        `UPDATE selectors SET failure_count = failure_count + 1
+         WHERE stable_id = ?`
+      )
+      .run(stable_id);
+    if (updated.changes === 0) {
+      db.prepare(
+        `INSERT OR IGNORE INTO selectors
+           (stable_id, role, name_norm, last_seen_at, failure_count)
+         VALUES (?, '', '', ?, 1)`
+      ).run(stable_id, now);
+    }
+  }
+
+  /**
+   * Return the historical reliability of a selector as a value in [0, 1].
+   *
+   * reliability = success_count / (success_count + failure_count)
+   *
+   * Returns 0.5 (neutral prior) when the selector has never been seen or when
+   * there is no outcome data (success_count + failure_count == 0).
+   *
+   * Reliability is scoped per-domain so the same stable_id on two different
+   * sites never influences each other.
+   */
+  reliability(domain: string, stable_id: string): number {
+    if (this.closed) throw new Error("SiteGraphCache: closed");
+    if (!isValidDomain(domain)) return 0.5;
+
+    const dbPath = join(this.cacheDir, `${domain}.db`);
+    if (!existsSync(dbPath) && !this.connections.has(domain)) return 0.5;
+
+    const db = this.dbFor(domain);
+    const row = db
+      .prepare(
+        `SELECT success_count, failure_count FROM selectors WHERE stable_id = ?`
+      )
+      .get(stable_id) as { success_count: number; failure_count: number } | undefined;
+
+    if (!row) return 0.5;
+    const total = row.success_count + row.failure_count;
+    if (total === 0) return 0.5;
+    return row.success_count / total;
+  }
+
   /** Close all open per-domain databases. Idempotent. */
   close(): void {
     if (this.closed) return;

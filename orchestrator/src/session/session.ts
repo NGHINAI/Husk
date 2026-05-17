@@ -410,7 +410,15 @@ export class Session {
 
     const snap = await this.snapshot();
     const flatNodes = flattenSnapshot(snap.root);
-    const r = await runFind({ snapshot: { nodes: flatNodes }, cache: null }, { intent: t.intent });
+    const domain = (() => {
+      try { return new URL(this.currentUrl).hostname; } catch { return undefined; }
+    })();
+    const r = await runFind({
+      snapshot: { nodes: flatNodes },
+      cache: null,
+      siteGraphCache: this.siteGraph ?? undefined,
+      domain,
+    }, { intent: t.intent });
     // Emit find event — both on success and failure (read-only, before action attempts).
     this.emitWatch({ kind: "find", ts: Date.now(), intent: t.intent, candidates: r.candidates });
     if (!r.ok) return { ok: false, reason: "no_match", candidates: r.candidates };
@@ -455,6 +463,13 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      // Record reliability outcome.
+      if (this.siteGraph) {
+        try {
+          const domain = new URL(this.currentUrl).hostname;
+          this.siteGraph.recordFailure(domain, stable_id);
+        } catch { /* ignore */ }
+      }
       return envelope;
     }
     if (pre.backendNodeId == null) {
@@ -474,6 +489,13 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      // Record reliability outcome.
+      if (this.siteGraph) {
+        try {
+          const domain = new URL(this.currentUrl).hostname;
+          this.siteGraph.recordFailure(domain, stable_id);
+        } catch { /* ignore */ }
+      }
       return envelope;
     }
     const urlBefore = this.currentUrl;
@@ -496,6 +518,13 @@ export class Session {
       ts: Date.now(),
       url_after: this.currentUrl,
     });
+    // Record reliability outcome in site-graph cache.
+    if (this.siteGraph) {
+      try {
+        const domain = new URL(this.currentUrl).hostname;
+        this.siteGraph.recordSuccess(domain, stable_id);
+      } catch { /* ignore parse errors */ }
+    }
     return result;
   }
 
@@ -512,6 +541,9 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       return envelope;
     }
     if (pre.backendNodeId == null) {
@@ -531,6 +563,9 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       return envelope;
     }
     const urlBefore = this.currentUrl;
@@ -553,6 +588,9 @@ export class Session {
       ts: Date.now(),
       url_after: this.currentUrl,
     });
+    if (this.siteGraph) {
+      try { this.siteGraph.recordSuccess(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+    }
     return result;
   }
 
@@ -569,6 +607,9 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      if (this.siteGraph && stable_id) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       return envelope;
     }
     const urlBefore = this.currentUrl;
@@ -591,6 +632,9 @@ export class Session {
       ts: Date.now(),
       url_after: this.currentUrl,
     });
+    if (this.siteGraph && stable_id) {
+      try { this.siteGraph.recordSuccess(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+    }
     return result;
   }
 
@@ -609,6 +653,9 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       // TODO(M14): mirror click/type and return the full RejectionEnvelope (candidates + snapshot_at_attempt)
       return { ok: false, reason: pre.envelope.reason };
     }
@@ -621,6 +668,9 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       return { ok: false, reason: "element_not_found" };
     }
     const result = await runUpload({
@@ -639,6 +689,14 @@ export class Session {
       ts: Date.now(),
       url_after: this.currentUrl,
     });
+    // Record reliability outcome.
+    if (this.siteGraph) {
+      try {
+        const domain = new URL(this.currentUrl).hostname;
+        if (result.ok) this.siteGraph.recordSuccess(domain, stable_id);
+        else this.siteGraph.recordFailure(domain, stable_id);
+      } catch { /* ignore */ }
+    }
     return result;
   }
 
