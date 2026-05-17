@@ -6,6 +6,7 @@ import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
 import { computeSignature, type AxLite } from "../snapshot/signature.js";
 import { extractMeta } from "../snapshot/meta.js";
+import { extractForms } from "../snapshot/forms.js";
 import { NetworkBuffer } from "./network-buffer.js";
 import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
@@ -283,6 +284,9 @@ export class Session {
 
     // M14 T4: Extract page metadata (title, canonical, og, jsonld).
     snap.meta = await extractMeta(this.cdp as any, this.sessionId);
+
+    // M14 T5: Extract form definitions (fields, labels, submit_text).
+    snap.forms = await extractForms(this.cdp as any, this.sessionId);
 
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();

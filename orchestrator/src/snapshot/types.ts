@@ -62,9 +62,8 @@ export interface SnapshotNetwork {
   recent: import("../session/network-buffer.js").NetworkEntry[];
   // likely_api_endpoints added in T10
 }
-export interface FormSchema {
-  [key: string]: unknown; // T5 will fill this in
-}
+export type FormSchema = import("./forms.js").FormSchema;
+export type FormField = import("./forms.js").FormField;
 export type SnapshotMeta = import("./meta.js").SnapshotMeta;
 export interface HistoryEntry {
   [key: string]: unknown; // T9 will fill this in
