@@ -53,7 +53,12 @@ describe("HTTP action methods", () => {
 
   it("scroll accepts null stable_id (window scroll) as Target object", async () => {
     await METHODS.scroll({ session_id: sessionId, stable_id: null, direction: "down", amount: 300 }, ctx);
-    expect(scroll).toHaveBeenCalledWith({ stable_id: null, intent: undefined, include_snapshot: undefined }, "down", 300);
+    expect(scroll).toHaveBeenCalledWith(
+      { stable_id: null, intent: undefined, include_snapshot: undefined },
+      "down",
+      300,
+      { until: undefined, max_scrolls: undefined, scroll_amount_px: undefined, include_snapshot: undefined },
+    );
   });
 
   it("press_key forwards the key string", async () => {

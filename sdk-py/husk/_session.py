@@ -99,31 +99,50 @@ class Session:
 
     async def scroll(
         self,
-        stable_id: Optional[str],
-        direction: ScrollDirection,
-        amount: int,
+        stable_id: Optional[str] = None,
+        direction: Optional[ScrollDirection] = None,
+        amount: Optional[int] = None,
         *,
         intent: Optional[str] = None,
         include_snapshot: Optional[bool] = None,
+        until: Optional[dict] = None,
+        max_scrolls: Optional[int] = None,
+        scroll_amount_px: Optional[int] = None,
     ) -> ActionResult:
-        """Scroll the page or an element. Pass ``stable_id`` (may be ``None``
-        for window scroll), ``direction``, and ``amount``.
+        """Scroll the page or an element.
 
-        Returns a dict with ``ok``, ``diff``, ``warnings``, and ``snapshot``.
+        Two modes:
+
+        **Scroll-until** (modern AI use case): pass ``until`` dict with a condition
+        (``text``, ``role``+``name``, ``url_matches``, ``network_idle``,
+        ``selector_visible``). The call loops internally up to ``max_scrolls``
+        (default 20) times and returns ``{ok, scrolls, condition_met?, snapshot}``.
+        DO NOT call scroll in a loop yourself — the single call does the loop.
+
+        **Pixel-based**: pass ``direction`` and ``amount`` for a one-shot scroll.
+
+        Returns a dict with ``ok``, ``diff``/``scrolls``, ``warnings``, and ``snapshot``.
         The ``snapshot`` field contains the full post-scroll page state.
         DO NOT call snapshot() after scroll — the snapshot is already in the result.
         Pass ``include_snapshot=False`` to opt out and save tokens.
         """
-        params: dict[str, Any] = {
-            "session_id": self._id,
-            "stable_id": stable_id,
-            "direction": direction,
-            "amount": amount,
-        }
+        params: dict[str, Any] = {"session_id": self._id}
+        if stable_id is not None:
+            params["stable_id"] = stable_id
+        if direction is not None:
+            params["direction"] = direction
+        if amount is not None:
+            params["amount"] = amount
         if intent is not None:
             params["intent"] = intent
         if include_snapshot is not None:
             params["include_snapshot"] = include_snapshot
+        if until is not None:
+            params["until"] = until
+        if max_scrolls is not None:
+            params["max_scrolls"] = max_scrolls
+        if scroll_amount_px is not None:
+            params["scroll_amount_px"] = scroll_amount_px
         raw = await self._client.call("scroll", params)
         return parse_action_result(raw)
 

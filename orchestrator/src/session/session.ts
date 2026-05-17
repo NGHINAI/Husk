@@ -26,6 +26,7 @@ import { performLogin, type LoginInput, type LoginResult } from "../auth/login-f
 import { totpCode } from "../auth/totp.js";
 import type { EngineHandle } from "../engine/pool.js";
 import { runFind, type FindCandidate } from "./find.js";
+import { runScrollUntil, type ScrollUntilResult } from "./scroll-until.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { WatchEvent } from "../watch/events.js";
 import { filterVisible } from "../snapshot/visible.js";
@@ -779,9 +780,49 @@ export class Session {
    * Scroll the page or an element. Pass `{ stable_id }` (may be null for
    * window scroll), `{ intent }`, or a bare `string | null`.
    *
+   * Pass `until` to scroll until a condition is met (scroll-until mode).
+   * In this mode `direction` and `amount` default to "down" / 800px and
+   * the method loops internally, returning {ok, scrolls, condition_met?, snapshot}.
+   *
    * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
-  async scroll(target: (Target & { include_snapshot?: boolean }) | string | null, direction: ScrollDirection, amount: number): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+  async scroll(
+    target: (Target & { include_snapshot?: boolean }) | string | null,
+    direction: ScrollDirection,
+    amount: number,
+    opts?: { until?: WaitForCondition; max_scrolls?: number; scroll_amount_px?: number; include_snapshot?: boolean },
+  ): Promise<ActionResultWithSnapshot<ActionResultWithIntent> | ActionResultWithSnapshot<ScrollUntilResult>>;
+  async scroll(
+    target: (Target & { include_snapshot?: boolean }) | string | null,
+    direction?: ScrollDirection,
+    amount?: number,
+    opts?: { until?: WaitForCondition; max_scrolls?: number; scroll_amount_px?: number; include_snapshot?: boolean },
+  ): Promise<ActionResultWithSnapshot<ActionResultWithIntent> | ActionResultWithSnapshot<ScrollUntilResult>> {
+    // Scroll-until mode: delegate to runScrollUntil.
+    if (opts?.until) {
+      const doSnap = opts.include_snapshot !== false;
+      const r = await runScrollUntil(
+        {
+          snapshot: async (o) => {
+            const snap = await this.snapshot(o);
+            return { url: snap.url, nodes: flattenSnapshot(snap.root) };
+          },
+          runtimeEval: async (expr: string) => {
+            const res = await this.cdp.send(
+              "Runtime.evaluate",
+              { expression: expr, returnByValue: true },
+              this.sessionId,
+            ) as { result?: { value?: unknown } };
+            return res.result?.value;
+          },
+          scroll: (_t, _d, a) => this.performScroll(null, "down", a),
+        },
+        { until: opts.until, max_scrolls: opts.max_scrolls, scroll_amount_px: opts.scroll_amount_px ?? amount },
+      );
+      return this.withSnapshot(r, doSnap);
+    }
+
+    // Normal pixel-based scroll path (unchanged).
     let raw: (Target & { include_snapshot?: boolean }) | null;
     if (target === null) {
       raw = { stable_id: null };
@@ -796,7 +837,7 @@ export class Session {
     if (!resolved.ok) {
       return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
-    const result = await this.performScroll(resolved.stable_id, direction, amount);
+    const result = await this.performScroll(resolved.stable_id, direction ?? "down", amount ?? 800);
     return this.withSnapshot(result, doSnap);
   }
 

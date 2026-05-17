@@ -47,8 +47,23 @@ export class Session {
     return await this.client.call<ActionResultWithSnapshot>("type", { session_id: this.id, ...target, text });
   }
 
-  async scroll(target: Target & { include_snapshot?: boolean }, direction: ScrollDirection, amount: number): Promise<ActionResultWithSnapshot> {
-    return await this.client.call<ActionResultWithSnapshot>("scroll", { session_id: this.id, ...target, direction, amount });
+  async scroll(
+    target: Target & { include_snapshot?: boolean },
+    direction?: ScrollDirection,
+    amount?: number,
+    opts?: {
+      until?: import("./types.js").WaitForCondition;
+      max_scrolls?: number;
+      scroll_amount_px?: number;
+    },
+  ): Promise<ActionResultWithSnapshot> {
+    return await this.client.call<ActionResultWithSnapshot>("scroll", {
+      session_id: this.id,
+      ...target,
+      direction,
+      amount,
+      ...opts,
+    });
   }
 
   async pressKey(key: string, opts: { include_snapshot?: boolean } = {}): Promise<ActionResultWithSnapshot> {

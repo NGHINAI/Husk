@@ -84,18 +84,32 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_scroll",
-    description: "Husk — Scroll the page or an element. Pass EITHER {stable_id} (exact, may be null for window scroll), {intent} (natural language like \"main content area\"), or omit both for a plain window scroll. On unresolved intent returns {ok:false, reason:\"no_match\"}.\n\nWHAT YOU GET: {ok, diff, warnings, snapshot} — the `snapshot` field contains the FULL post-scroll page state (AX tree + signature + meta + forms + network + console + summary + session_history) showing what's now in view. DO NOT call husk_snapshot after scrolling — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
+    description: "husk_scroll — Scroll the page or an element.\n\nWHEN TO USE:\n- Pass `{until: <condition>}` to scroll until a condition is met. This is the modern AI use case — scroll an infinite feed (Twitter, Reddit, etc.) until \"Load more\" appears, or until network goes idle, or until a specific element becomes visible. Each call does up to max_scrolls (default 20) viewport-height scrolls and stops as soon as the condition is true.\n- Pass `{direction, amount}` for one-shot pixel-based scroll. Use this only when you know exactly how far to scroll.\n\nWHAT YOU GET: {ok, scrolls, condition_met?, reason?, snapshot}. With `until`, you also get the post-scroll snapshot — DO NOT call husk_snapshot after. Default include_snapshot:true.\n\nConditions (same set as husk_wait_for): {text, role+name, url_matches, network_idle, selector_visible}.\n\nDO NOT use a husk_scroll loop driven by your own polling — that's wasteful. The single husk_scroll({until: ...}) does the loop for you in one tool call.\n\nExample: husk_scroll({session_id, until: {text: \"Load more\"}, max_scrolls: 30}) — scrolls a feed until \"Load more\" appears, up to 30 viewports.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         stable_id: { type: ["string", "null"], description: "Element stable id to scroll into view, or null for window scroll. Pass either stable_id or intent." },
         intent: { type: "string", description: "Natural language description of the element to scroll, e.g. \"comments section\". Pass either stable_id or intent." },
-        direction: { type: "string", enum: ["up", "down", "left", "right", "into_view"] },
-        amount: { type: "number", description: "Pixels to scroll (ignored for into_view)" },
+        direction: { type: "string", enum: ["up", "down", "left", "right", "into_view"], description: "Scroll direction for pixel-based scroll. Defaults to \"down\" when `until` is provided." },
+        amount: { type: "number", description: "Pixels to scroll per step (ignored for into_view). Defaults to 800 when `until` is provided." },
+        until: {
+          type: "object",
+          description: "Condition to scroll until. When provided, husk_scroll loops internally (up to max_scrolls times) and stops when the condition is met. Same condition set as husk_wait_for.",
+          properties: {
+            text: { type: "string", description: "Substring to look for in any visible node name." },
+            role: { type: "string", description: "Accessible role (used together with name)." },
+            name: { type: "string", description: "Accessible name (used together with role)." },
+            url_matches: { type: "string", description: "Regex matched against the current URL." },
+            network_idle: { type: "number", description: "Milliseconds of zero in-flight network requests." },
+            selector_visible: { type: "string", description: "CSS selector whose element must be visible." },
+          },
+        },
+        max_scrolls: { type: "number", description: "Maximum number of scroll steps when `until` is provided. Default 20." },
+        scroll_amount_px: { type: "number", description: "Pixels per scroll step when `until` is provided. Default 800." },
         include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after scrolling." },
       },
-      required: ["session_id", "direction", "amount"],
+      required: ["session_id"],
     },
   },
   {

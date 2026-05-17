@@ -127,11 +127,26 @@ export const METHODS = {
   },
 
   async scroll(
-    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number; include_snapshot?: boolean },
+    params: {
+      session_id: string;
+      stable_id?: string | null;
+      intent?: string;
+      direction?: "up" | "down" | "left" | "right" | "into_view";
+      amount?: number;
+      include_snapshot?: boolean;
+      until?: WaitForCondition;
+      max_scrolls?: number;
+      scroll_amount_px?: number;
+    },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.scroll({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot }, params.direction, params.amount);
+    return await session.scroll(
+      { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
+      (params.direction ?? "down") as "up" | "down" | "left" | "right" | "into_view",
+      params.amount ?? 800,
+      { until: params.until, max_scrolls: params.max_scrolls, scroll_amount_px: params.scroll_amount_px, include_snapshot: params.include_snapshot },
+    );
   },
 
   async press_key(
