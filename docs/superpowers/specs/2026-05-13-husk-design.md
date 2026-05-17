@@ -612,6 +612,64 @@ When bound to `0.0.0.0` (or anything non-localhost), `/watch` and `/watch/stream
 
 ---
 
+### 5.9 Snapshot Maximalism + AI-First Ergonomics (M14 — shipped 2026-05-17)
+
+#### Motivation
+
+Through M13, an agent's typical workflow was `goto → snapshot → click → snapshot → extract` (5 turns). Every turn costs an LLM round-trip plus context bytes. M14 reduces this to `goto → click → extract` (3 turns) by making `husk_snapshot` a universal context dump and folding the post-action snapshot into every action result.
+
+M14 also adds the two missing loop primitives — `scroll-until` and `extract.paginate` — that turn 10-turn polling loops into 1 tool call.
+
+**Zero new MCP tools.** All 14 capabilities fold into existing verbs.
+
+#### Snapshot envelope (the universal context dump)
+
+`husk_snapshot` returns:
+
+| Field | Source | Why |
+|---|---|---|
+| `root, url, mode` | existing (M1+) | The AX tree itself |
+| `signature: {dom_hash, network_fingerprint, url}` | T1 | Lets agent detect "I'm back where I was" |
+| `meta: {title, canonical, og[], jsonld[]}` | T4 | Structured data already on every site |
+| `forms: [{fields[], submit_text, action, method}]` | T5 | Fill any form in 1 turn |
+| `network: {recent[], likely_api_endpoints[]}` | T2 + T10 | Discover the JSON API behind the UI |
+| `console: [{level, text, ts}]` | T3 | Free debugging |
+| `summary: string` | T7 | Rule-based: "Login page — fields: email, password" |
+| `session_history: [last 10 actions]` | T9 | Agent stops re-tracking its own state |
+| `image_b64` | T8 | Optional via `include_image:true` |
+
+New mode: `mode: "visible"` filters to nodes whose bbox intersects the current viewport — 60-80% token reduction on long pages.
+
+#### Action results carry post-action snapshot
+
+`husk_click`/`husk_type`/`husk_scroll`/`husk_press_key`/`husk_upload`/`husk_goto`/`husk_login` all return `{ok, diff, snapshot, ...}` by default. The snapshot is cached (M9 freshness window), so it costs ~nothing. Agents stop calling `husk_snapshot` after every action.
+
+Opt out via `include_snapshot: false`.
+
+#### Find ergonomics
+
+`find()` candidates now carry `viewport: {x, y, region}` (e.g., `region: "top-left"`) so agents disambiguate by visual location. Per-node reliability scoring (M4 cache `success_count`/`failure_count`) weights ranking — selectors that historically worked stay reliable; flaky ones decay.
+
+#### Loop primitives
+
+**`husk_scroll({until: <predicate>})`** — same predicate as `husk_wait_for`. Replaces "scroll, snapshot, check, repeat" loops.
+
+**`husk_extract({css|selectors, paginate: {next, max_pages, stop_when?}})`** — extracts across N pages with click-next loop. Returns `{pages, total_pages, stopped_reason}`.
+
+#### Decisions
+
+**Decision O — Snapshot Maximalism.** `husk_snapshot` is the agent's universal context dump. New observability folds into the snapshot envelope. New MCP tools require a genuinely distinct verb (per Decision N).
+
+**Decision P — Post-action context is the default.** Every action returns its post-state. Opt-out is explicit. Eliminates the click→snapshot anti-pattern.
+
+**Decision Q — Loop primitives over loop tools.** Instead of `husk_paginate` and `husk_scroll_until` as new tools, the loop semantic is a parameter on the existing verb. Single-source-of-truth for the verb; agents never wonder which scroll tool to pick.
+
+#### MCP surface
+
+**18 tools, unchanged from M13.**
+
+---
+
 ## 6. Developer Experience — How Agents Access Husk
 
 Four interfaces. All v0. All routed through the same JSON-RPC orchestrator.

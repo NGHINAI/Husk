@@ -188,6 +188,40 @@ Husk now handles *any* workflow:
 
 When `husk start` binds to 127.0.0.1, the orchestrator serves a live viewer at `http://127.0.0.1:PORT/watch`. `create_session` returns `{session_id, watch_url}` so agents can proactively offer the URL: "want to watch what I'm seeing?". Live AX tree on the left, color-coded event log on the right. No external assets, no framework.
 
+## Snapshot Maximalism (M14)
+
+`husk_snapshot` is now your one-stop context dump:
+
+```
+{
+  root, url, mode,
+  signature: { dom_hash, network_fingerprint },
+  meta: { title, canonical, og, jsonld },
+  forms: [{ fields, submit_text }],
+  network: { recent[], likely_api_endpoints[] },
+  console: [],
+  summary: "Login page — fields: email, password",
+  session_history: [last 10 actions],
+  image_b64?  // when include_image:true
+}
+```
+
+And every action returns the post-state inline — `husk_click`/`type`/`scroll`/`upload`/`goto`/`login` now include `snapshot` in their result. Stop calling `husk_snapshot` after every action.
+
+### New modes & options
+
+- `husk_snapshot({mode: "visible"})` — only nodes whose bbox intersects the viewport (smallest payload)
+- `husk_snapshot({include_image: true})` — base64 PNG attached to the result
+- `husk_scroll({until: { text|role+name|url_matches|network_idle|selector_visible }})` — scroll-until, replaces polling loops
+- `husk_extract({selectors, paginate: { next: { intent }, max_pages: 10 }})` — extract across N pages in one call
+
+### Turn-count math
+
+Pre-M14: `goto → snapshot → click → snapshot → extract` (5 turns).
+M14: `goto → click → extract` (3 turns). Each click/goto carries its post-snapshot.
+
+MCP surface unchanged: 18 tools.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing
