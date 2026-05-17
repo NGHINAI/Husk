@@ -46,6 +46,8 @@ export const TOOL_SURFACE: ToolSpec[] = [
           enum: ["full", "terse", "visible"],
           description: "Snapshot mode: \"full\" (default; complete AX tree), \"terse\" (drops nav/banner/footer subtrees), or \"visible\" (only nodes whose bbox intersects the viewport — smallest payload, best for long scrollable pages).",
         },
+        include_image: { type: "boolean", description: "Attach a base64 PNG screenshot as `image_b64`. Forces a fresh capture (bypasses cache). Default false." },
+        full_page: { type: "boolean", description: "When include_image is true, capture the full scrollable page rather than just the viewport. Default false." },
       },
       required: ["session_id"],
     },

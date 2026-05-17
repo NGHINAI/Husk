@@ -28,6 +28,7 @@ import { runFind, type FindCandidate } from "./find.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { WatchEvent } from "../watch/events.js";
 import { filterVisible } from "../snapshot/visible.js";
+import { captureScreenshot } from "../snapshot/screenshot.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -255,11 +256,14 @@ export class Session {
     }
   }
 
-  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" | "visible" } = {}): Promise<Snapshot> {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" | "visible"; include_image?: boolean; full_page?: boolean } = {}): Promise<Snapshot> {
     const maxAge = opts.maxAgeMs ?? 500;
     const mode = opts.mode ?? "full";
+    // When include_image is true, bypass the cache (always get fresh)
+    const bypassCacheForImage = opts.include_image === true;
     const fresh =
       !opts.force &&
+      !bypassCacheForImage &&
       this.lastSnapshot &&
       Date.now() - this.lastSnapshotAt < maxAge &&
       this.lastSnapshotMode === mode;
@@ -333,6 +337,11 @@ export class Session {
       forms: snap.forms ?? [],
       nodes_count: countAxNodes(snap.root),
     });
+
+    // M14 T8: Optionally attach base64 PNG screenshot.
+    if (opts.include_image) {
+      snap.image_b64 = (await captureScreenshot(this.cdp as any, { fullPage: opts.full_page })) ?? undefined;
+    }
 
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();

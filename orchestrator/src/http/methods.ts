@@ -87,11 +87,11 @@ export const METHODS = {
   },
 
   async snapshot(
-    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" | "visible" },
+    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" | "visible"; include_image?: boolean; full_page?: boolean },
     ctx: MethodContext
   ): Promise<Snapshot> {
     const session = ctx.sessions.get(params.session_id);
-    return await session.snapshot({ maxAgeMs: params.max_age_ms, mode: params.mode });
+    return await session.snapshot({ maxAgeMs: params.max_age_ms, mode: params.mode, include_image: params.include_image, full_page: params.full_page });
   },
 
   async snapshot_diff(
