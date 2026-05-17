@@ -18,7 +18,7 @@ cheerfully clicks nothing and your downstream logic confuses itself.
 
 Husk is the opposite stack:
 
-- **Real browser engine, not a wrapper.** Forked lightpanda. Zig. No paint,
+- **Real browser engine, not a wrapper.** Zig. No paint,
   no GPU, ~50 MB binary, ~10 ms cold-start. JavaScript still executes;
   pixels never render.
 - **Watchdog as a feature.** Every action passes through a deterministic
