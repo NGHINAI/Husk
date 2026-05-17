@@ -5,6 +5,7 @@ import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
 import { computeSignature, type AxLite } from "../snapshot/signature.js";
+import { extractMeta } from "../snapshot/meta.js";
 import { NetworkBuffer } from "./network-buffer.js";
 import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
@@ -279,6 +280,9 @@ export class Session {
       url: snap.url,
       networkUrls: this.networkBuffer.urls(),
     });
+
+    // M14 T4: Extract page metadata (title, canonical, og, jsonld).
+    snap.meta = await extractMeta(this.cdp as any, this.sessionId);
 
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();

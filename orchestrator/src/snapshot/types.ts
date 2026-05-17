@@ -65,9 +65,7 @@ export interface SnapshotNetwork {
 export interface FormSchema {
   [key: string]: unknown; // T5 will fill this in
 }
-export interface SnapshotMeta {
-  [key: string]: unknown; // T4 will fill this in
-}
+export type SnapshotMeta = import("./meta.js").SnapshotMeta;
 export interface HistoryEntry {
   [key: string]: unknown; // T9 will fill this in
 }
