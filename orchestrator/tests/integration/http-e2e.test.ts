@@ -76,7 +76,7 @@ integrationOrSkip("HTTP e2e — husk start → create_session → goto → snaps
         method: "goto",
         params: { session_id, url: fixture.url },
       });
-      expect(gotoRes.result).toEqual({ ok: true });
+      expect(gotoRes.result).toMatchObject({ ok: true });
 
       // 4. snapshot
       const snapRes = await post(rpcUrl, {

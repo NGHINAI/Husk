@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `husk_snapshot` the agent's one-stop context dump (network, forms, console, metadata, session history, summary, optional screenshot, state signature), make every action return its post-state inline, and add the two loop primitives (scroll-until, paginate). **Zero new MCP tools.** MCP surface stays at 21.
+**Goal:** Make `husk_snapshot` the agent's one-stop context dump (network, forms, console, metadata, session history, summary, optional screenshot, state signature), make every action return its post-state inline, and add the two loop primitives (scroll-until, paginate). **Zero new MCP tools.** MCP surface stays at 18.
 
 **Architecture:** All 15 capabilities fold into existing verbs. Snapshot result grows from `{root, url, mode}` to a rich envelope. Action results carry the post-action snapshot. `husk_scroll` gains `until`. `husk_extract` gains `paginate`. `find()` resolver gains viewport positions in candidates + per-node reliability scoring (silent backend ranking change).
 
@@ -72,7 +72,7 @@
 | T14 | Extract paginate — `husk_extract({paginate: {next, max_pages, stop_when?}})` | extract param | Sonnet | 3h |
 | T15 | Spec §5.9 + README + memory + tag v0.0.13-m14 + merge --no-ff + push | docs | Haiku | 1h |
 
-**Total:** 15 tasks, ~27h (~2.5 working days at Husk pace). MCP surface: **+0 tools** (stays at 21).
+**Total:** 15 tasks, ~27h (~2.5 working days at Husk pace). MCP surface: **+0 tools** (stays at 18).
 
 ---
 
@@ -1063,7 +1063,7 @@ Wire as `husk_extract({css|selectors, paginate: {next, max_pages?, stop_when?}})
 5. **M4 cache change** — `selectors.success_count`, `selectors.failure_count` columns + reliability-weighted ranking.
 6. **Loop primitives** — scroll-until + paginate-on-extract contracts.
 7. **Decision O — Snapshot Maximalism** — snapshot is the agent's universal context. Fold all observation into it; reserve new MCP tools only for genuinely distinct verbs (per Decision N).
-8. **MCP surface unchanged** — 21 tools before/after.
+8. **MCP surface unchanged** — 18 tools before/after.
 
 ### README
 
@@ -1083,7 +1083,7 @@ git tag -a v0.0.13-m14 -m "M14: snapshot maximalism + AI-first ergonomics
 - post-action snapshot inline by default
 - viewport position + per-node reliability in find candidates
 - scroll-until and extract.paginate loop primitives
-- MCP surface unchanged: 21 tools (same as M13)"
+- MCP surface unchanged: 18 tools (same as M13)"
 
 git checkout main
 git merge --no-ff m14-snapshot-maximalism -m "Merge Milestone 14 (snapshot maximalism + AI-first ergonomics)"
@@ -1101,7 +1101,7 @@ git push origin v0.0.13-m14
 
 **Type consistency:** `WaitForCondition` reused in scroll-until's `until` and paginate's `stop_when`. `FindCandidate` extended with `viewport`. `Snapshot` extended with 8 optional fields. `ActionResult` extended with `snapshot?` field. ✓
 
-**Tool bloat check:** 0 new MCP tools. All 15 capabilities fold into 4 existing verbs (snapshot, click/type/scroll/upload action results, scroll's params, extract's params) plus invisible backend changes (reliability scoring, find candidate enrichment). MCP surface stays at 21. ✓
+**Tool bloat check:** 0 new MCP tools. All 15 capabilities fold into 4 existing verbs (snapshot, click/type/scroll/upload action results, scroll's params, extract's params) plus invisible backend changes (reliability scoring, find candidate enrichment). MCP surface stays at 18. ✓
 
 **Turn-savings sanity:** A typical M13-era workflow `goto → snapshot → click → snapshot → extract` becomes M14 `goto → click → extract` because goto returns a snapshot, click returns a snapshot, and extract reads from the cached snapshot or hits the API directly. **3 turns instead of 5.** Plus scroll-until and paginate each replace what used to be 10+ turn loops with 1 turn. ✓
 
