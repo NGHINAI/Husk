@@ -65,9 +65,7 @@ export interface SnapshotNetwork {
 export type FormSchema = import("./forms.js").FormSchema;
 export type FormField = import("./forms.js").FormField;
 export type SnapshotMeta = import("./meta.js").SnapshotMeta;
-export interface HistoryEntry {
-  [key: string]: unknown; // T9 will fill this in
-}
+export type HistoryEntry = import("../session/history-buffer.js").HistoryEntry;
 
 export interface Snapshot {
   /** Snapshot format version (spec §5.2 reserves 0 for stub, 1 for v0). */

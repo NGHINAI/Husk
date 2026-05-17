@@ -10,6 +10,7 @@ import { extractForms } from "../snapshot/forms.js";
 import { summarize } from "../snapshot/summary.js";
 import { NetworkBuffer } from "./network-buffer.js";
 import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
+import { HistoryBuffer } from "./history-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -105,6 +106,8 @@ export class Session {
   private networkBuffer = new NetworkBuffer(100);
   /** Ring buffer of recent console messages (Runtime + Log CDP events). */
   private consoleBuffer = new ConsoleBuffer(50);
+  /** Ring buffer of recent session actions (click, type, etc). */
+  private historyBuffer = new HistoryBuffer(10);
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -239,6 +242,14 @@ export class Session {
   async goto(url: string): Promise<void> {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
+    // Track goto in history (no target_name for navigation)
+    this.historyBuffer.add({
+      verb: "goto",
+      target_name: null,
+      ok: true,
+      ts: Date.now(),
+      url_after: url,
+    });
     // Emit navigation event.
     this.emitWatch({ kind: "navigation", ts: Date.now(), url });
     // Wait for the page to reach a network-idle state instead of a fixed delay.
@@ -338,6 +349,9 @@ export class Session {
       nodes_count: countAxNodes(snap.root),
     });
 
+    // M14 T9: Attach session history buffer to snapshot.
+    snap.session_history = this.historyBuffer.recent();
+
     // M14 T8: Optionally attach base64 PNG screenshot.
     if (opts.include_image) {
       snap.image_b64 = (await captureScreenshot(this.cdp as any, { fullPage: opts.full_page })) ?? undefined;
@@ -397,6 +411,21 @@ export class Session {
     return { ok: true, stable_id: r.candidates[0].stable_id };
   }
 
+  // Extracts the accessible name of a node by stable_id from a snapshot.
+  private getTargetName(snapshot: Snapshot, stable_id: string | null): string | null {
+    if (!stable_id) return null;
+    const findNode = (node: SnapshotNode): SnapshotNode | null => {
+      if (node.i === stable_id) return node;
+      for (const child of node.c ?? []) {
+        const found = findNode(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    const node = findNode(snapshot.root);
+    return node?.n ?? null;
+  }
+
   // ---------------------------------------------------------------------------
   // Internal perform* methods — take a resolved stable_id, run watchdog, dispatch.
   // ---------------------------------------------------------------------------
@@ -406,11 +435,19 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "click", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "click",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: "element_not_found", candidates: [] });
-      return {
+      const envelope: RejectionEnvelope = {
         ok: false,
         reason: "element_not_found",
         verb: "click",
@@ -418,6 +455,14 @@ export class Session {
         candidates: [],
         snapshot_at_attempt: before,
       };
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "click",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
@@ -431,6 +476,14 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "click", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "click",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
     return result;
   }
 
@@ -439,11 +492,19 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "type", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "type",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: "element_not_found", candidates: [] });
-      return {
+      const envelope: RejectionEnvelope = {
         ok: false,
         reason: "element_not_found",
         verb: "type",
@@ -451,6 +512,14 @@ export class Session {
         candidates: [],
         snapshot_at_attempt: before,
       };
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "type",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
@@ -464,6 +533,14 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "type", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "type",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
     return result;
   }
 
@@ -472,7 +549,15 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "scroll", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "scroll", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "scroll",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
@@ -486,6 +571,14 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "scroll", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "scroll",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
     return result;
   }
 
@@ -497,11 +590,25 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "upload", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "upload",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
       // TODO(M14): mirror click/type and return the full RejectionEnvelope (candidates + snapshot_at_attempt)
       return { ok: false, reason: pre.envelope.reason };
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: "element_not_found", candidates: [] });
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "upload",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
       return { ok: false, reason: "element_not_found" };
     }
     const result = await runUpload({
@@ -512,6 +619,14 @@ export class Session {
       resolveBackendNodeId: async (_sid: string) => pre.backendNodeId!,
     }, { stable_id, ...fileSpec });
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "upload", stable_id, ok: result.ok });
+    // Track result in history
+    this.historyBuffer.add({
+      verb: "upload",
+      target_name: this.getTargetName(before, stable_id),
+      ok: result.ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
     return result;
   }
 
@@ -582,7 +697,15 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "press_key", null);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "press_key", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history (no target for keyboard action)
+      this.historyBuffer.add({
+        verb: "press_key",
+        target_name: null,
+        ok: false,
+        ts: Date.now(),
+      });
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
@@ -596,6 +719,14 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "press_key", stable_id: null, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "press_key",
+      target_name: null,
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
     return result;
   }
 
@@ -640,8 +771,27 @@ export class Session {
     // JavaScript-based form fill when that happens.
     if (!result.ok && result.reason === "login_form_not_found") {
       const jsResult = await this.jsFormLogin(input.username, input.password);
-      if (jsResult !== null) return jsResult;
+      if (jsResult !== null) {
+        // Track login success in history
+        this.historyBuffer.add({
+          verb: "login",
+          target_name: null,
+          ok: true,
+          ts: Date.now(),
+          url_after: this.currentUrl,
+        });
+        return jsResult;
+      }
     }
+
+    // Track login result in history (after all fallbacks)
+    this.historyBuffer.add({
+      verb: "login",
+      target_name: null,
+      ok: result.ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
 
     return result;
   }
@@ -737,7 +887,17 @@ export class Session {
   }
 
   async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null>> {
-    return await runExtract(this.cdp, this.sessionId, query);
+    const result = await runExtract(this.cdp, this.sessionId, query);
+    // Track extract in history (success is determined by result not being null)
+    const ok = result !== null;
+    this.historyBuffer.add({
+      verb: "extract",
+      target_name: null,
+      ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    return result;
   }
 
   async waitFor(c: WaitForCondition): Promise<WaitForResult> {
