@@ -4,6 +4,7 @@ import { waitForPageReady } from "./page-ready.js";
 import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
+import { computeSignature } from "../snapshot/signature.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -193,6 +194,16 @@ export class Session {
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
     const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode });
+
+    // M14 T1: Compute and attach state signature.
+    // networkUrls is populated by T2/T10; for now, empty list.
+    const networkUrls: string[] = [];
+    snap.signature = computeSignature({
+      root: snap.root as unknown as { i: string; r: string; n: string; c?: unknown[] },
+      url: snap.url,
+      networkUrls,
+    });
+
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();
     this.lastSnapshotMode = mode;

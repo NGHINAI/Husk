@@ -56,6 +56,23 @@ export interface SnapshotNode {
   c?: SnapshotNode[];
 }
 
+/** M14: Forward-declared types for new Snapshot envelope fields (T2-T10). */
+export interface SnapshotNetwork {
+  [key: string]: unknown; // T2 + T10 will fill this in
+}
+export interface FormSchema {
+  [key: string]: unknown; // T5 will fill this in
+}
+export interface ConsoleMessage {
+  [key: string]: unknown; // T3 will fill this in
+}
+export interface SnapshotMeta {
+  [key: string]: unknown; // T4 will fill this in
+}
+export interface HistoryEntry {
+  [key: string]: unknown; // T9 will fill this in
+}
+
 export interface Snapshot {
   /** Snapshot format version (spec §5.2 reserves 0 for stub, 1 for v0). */
   v: 1;
@@ -73,6 +90,36 @@ export interface Snapshot {
    * snapshots (e.g. from disk in tests) lack it.
    */
   _resolver?: import("./resolver.js").SelectorResolver;
+
+  // ----- M14 Snapshot envelope (T1-T10, all optional for back-compat) -----
+
+  /** T1: State signature — dom_hash + network_fingerprint. */
+  signature?: {
+    dom_hash: string;
+    network_fingerprint: string;
+    url: string;
+  };
+
+  /** T4: Snapshot metadata (title, viewport, timing, etc.). */
+  meta?: SnapshotMeta;
+
+  /** T5: Form definitions discovered on the page. */
+  forms?: FormSchema[];
+
+  /** T2 + T10: Network activity log. */
+  network?: SnapshotNetwork;
+
+  /** T3: Console messages captured. */
+  console?: ConsoleMessage[];
+
+  /** T7: One-line summary of page purpose. */
+  summary?: string;
+
+  /** T9: Navigation/action history for this session. */
+  session_history?: HistoryEntry[];
+
+  /** T8: Optional page image (base64 PNG, only when include_image=true). */
+  image_b64?: string;
 }
 
 // ----- Diff types for mutation poller (Task 7) -----
