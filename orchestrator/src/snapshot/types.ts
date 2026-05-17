@@ -65,9 +65,6 @@ export interface SnapshotNetwork {
 export interface FormSchema {
   [key: string]: unknown; // T5 will fill this in
 }
-export interface ConsoleMessage {
-  [key: string]: unknown; // T3 will fill this in
-}
 export interface SnapshotMeta {
   [key: string]: unknown; // T4 will fill this in
 }
@@ -112,7 +109,7 @@ export interface Snapshot {
   network?: SnapshotNetwork;
 
   /** T3: Console messages captured. */
-  console?: ConsoleMessage[];
+  console?: import("../session/console-buffer.js").ConsoleMessage[];
 
   /** T7: One-line summary of page purpose. */
   summary?: string;

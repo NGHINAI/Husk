@@ -6,6 +6,7 @@ import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
 import { computeSignature, type AxLite } from "../snapshot/signature.js";
 import { NetworkBuffer } from "./network-buffer.js";
+import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -78,6 +79,17 @@ export type ActionResultWithIntent =
   | ActionResult
   | { ok: false; reason: "no_match" | "ambiguous_intent" | "missing_target"; candidates: FindCandidate[] };
 
+/** Normalize CDP console.type / Log.level strings to our ConsoleLevel enum. */
+function normalizeConsoleLevel(t?: string): ConsoleLevel {
+  switch (t) {
+    case "error": case "assert": return "error";
+    case "warning": case "warn": return "warn";
+    case "info": return "info";
+    case "debug": case "trace": return "debug";
+    default: return "log";
+  }
+}
+
 export class Session {
   private lastSnapshotAt = 0;
   private lastSnapshotMode: "full" | "terse" = "full";
@@ -86,6 +98,8 @@ export class Session {
   private networkIdleMs = 500;
   /** Ring buffer of recent CDP Network events. Populated after Session.create(). */
   private networkBuffer = new NetworkBuffer(100);
+  /** Ring buffer of recent console messages (Runtime + Log CDP events). */
+  private consoleBuffer = new ConsoleBuffer(50);
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -145,6 +159,8 @@ export class Session {
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Network.enable", {}, sessionId);
     await cdp.send("Accessibility.enable", {}, sessionId);
+    await cdp.send("Runtime.enable", {}, sessionId);
+    await cdp.send("Log.enable", {}, sessionId).catch(() => {});  // some engines don't have Log domain
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
     const inst = new Session(
@@ -182,6 +198,30 @@ export class Session {
       if (!p.requestId) return;
       inst.networkBuffer.onFailed(p.requestId, {
         completedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+
+    // Wire CDP Runtime.consoleAPICalled events into the console buffer.
+    // CDP timestamps are fractional seconds — multiply by 1000 to get ms.
+    cdp.on("Runtime.consoleAPICalled", (params: unknown) => {
+      const p = params as { type?: string; args?: Array<{ value?: unknown; description?: string }>; timestamp?: number };
+      const text = (p.args ?? [])
+        .map((a) => (typeof a.value === "string" ? a.value : a.description ?? JSON.stringify(a.value ?? null)))
+        .join(" ");
+      const level = normalizeConsoleLevel(p.type);
+      inst.consoleBuffer.add({ level, text, ts: (p.timestamp ?? 0) * 1000 });
+    });
+
+    // Wire CDP Log.entryAdded events into the console buffer.
+    // Log.entryAdded timestamps are already in ms per CDP spec.
+    cdp.on("Log.entryAdded", (params: unknown) => {
+      const p = params as { entry?: { level?: string; text?: string; timestamp?: number } };
+      const e = p.entry;
+      if (!e) return;
+      inst.consoleBuffer.add({
+        level: normalizeConsoleLevel(e.level),
+        text: e.text ?? "",
+        ts: e.timestamp ?? 0,
       });
     });
 
@@ -229,6 +269,9 @@ export class Session {
 
     // M14 T2: Attach network ring buffer to snapshot.
     snap.network = { recent: this.networkBuffer.recent() };
+
+    // M14 T3: Attach console buffer to snapshot.
+    snap.console = this.consoleBuffer.recent();
 
     // M14 T1+T2: Compute state signature with actual network URLs.
     snap.signature = computeSignature({
