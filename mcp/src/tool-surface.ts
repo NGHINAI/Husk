@@ -23,12 +23,13 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_goto",
-    description: "Husk — Navigate the session to a URL.",
+    description: "Husk — Navigate the session to a URL.\n\nWHEN TO USE: Any navigation to a new page or URL change.\n\nWHAT YOU GET: {ok, snapshot?} — the `snapshot` field contains the FULL post-navigation page state (AX tree + signature + meta + forms + network + console + summary + session_history). DO NOT call husk_snapshot after husk_goto — this snapshot field already contains everything you need. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-navigation state.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string", description: "Session id from husk_create_session" },
         url: { type: "string", description: "Absolute URL" },
+        include_snapshot: { type: "boolean", description: "Include post-navigation snapshot in result. Default true. Pass false to save tokens if you don't need the page state immediately." },
       },
       required: ["session_id", "url"],
     },
@@ -54,20 +55,21 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_click",
-    description: "Husk — Click an element. STRONGLY PREFER {intent} (natural language like \"100PC Wings with Fries\" or \"sign in button\") over {stable_id} — intent is faster than re-snapshotting to find an id, and reads naturally from the user's request. Resolved via deterministic AX scoring (~1ms). DO NOT use husk_press_key as a substitute for clicking — keyboard-nav is unreliable on JS sites; always try husk_click({intent}) first. If the element name appeared in a recent snapshot, pass that name verbatim as the intent. On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[{stable_id, role, name, score}]} — pick the right candidate by stable_id and retry. On no match, returns {ok:false, reason:\"no_match\"}. On disabled element, returns watchdog rejection {ok:false, reason:\"element_disabled\"} — tell the user the element is disabled rather than trying workarounds. Watchdog-protected. Result includes a `diff` field. For login forms specifically, use husk_login instead.",
+    description: "Husk — Click an element. STRONGLY PREFER {intent} (natural language like \"100PC Wings with Fries\" or \"sign in button\") over {stable_id} — intent is faster than re-snapshotting to find an id, and reads naturally from the user's request. Resolved via deterministic AX scoring (~1ms). DO NOT use husk_press_key as a substitute for clicking — keyboard-nav is unreliable on JS sites; always try husk_click({intent}) first. If the element name appeared in a recent snapshot, pass that name verbatim as the intent. On ambiguous intent (multiple matches within 0.05 score), returns {ok:false, reason:\"ambiguous_intent\", candidates:[{stable_id, role, name, score}]} — pick the right candidate by stable_id and retry. On no match, returns {ok:false, reason:\"no_match\"}. On disabled element, returns watchdog rejection {ok:false, reason:\"element_disabled\"} — tell the user the element is disabled rather than trying workarounds. Watchdog-protected. For login forms specifically, use husk_login instead.\n\nWHAT YOU GET: {ok, diff, warnings, snapshot} — the `snapshot` field contains the FULL post-click page state (AX tree + signature + meta + forms + network + console + summary + session_history). DO NOT call husk_snapshot after a successful click — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         stable_id: { type: "string", description: "Exact stable id from a snapshot. Use this when you have the id." },
         intent: { type: "string", description: "Natural language description of the element to click, e.g. \"sign in button\" or \"submit form\". Resolved via deterministic AX scoring. Pass either stable_id or intent, not both." },
+        include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after clicking." },
       },
       required: ["session_id"],
     },
   },
   {
     name: "husk_type",
-    description: "Husk — Type into a text field. STRONGLY PREFER {intent} (e.g. \"search box\", \"email field\") over {stable_id}. Resolved via deterministic AX scoring; passes the snapshot field name verbatim if it appeared in a snapshot. On ambiguous/unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\", candidates:[...]}. Requires `text`. Watchdog-protected. Result includes a `diff` field. IMPORTANT: does NOT work for password inputs on the bundled lightpanda engine — for ANY login flow (username + password + submit), use `husk_login` instead.",
+    description: "Husk — Type into a text field. STRONGLY PREFER {intent} (e.g. \"search box\", \"email field\") over {stable_id}. Resolved via deterministic AX scoring; passes the snapshot field name verbatim if it appeared in a snapshot. On ambiguous/unresolved intent, returns {ok:false, reason:\"ambiguous_intent\"|\"no_match\", candidates:[...]}. Requires `text`. Watchdog-protected. IMPORTANT: does NOT work for password inputs on the bundled lightpanda engine — for ANY login flow (username + password + submit), use `husk_login` instead.\n\nWHAT YOU GET: {ok, diff, warnings, snapshot} — the `snapshot` field contains the FULL post-type page state (AX tree + signature + meta + forms + network + console + summary + session_history). DO NOT call husk_snapshot after typing — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -75,13 +77,14 @@ export const TOOL_SURFACE: ToolSpec[] = [
         stable_id: { type: "string", description: "Exact stable id from a snapshot. Pass either stable_id or intent." },
         intent: { type: "string", description: "Natural language description of the field, e.g. \"email textbox\". Pass either stable_id or intent." },
         text: { type: "string", description: "Text to type into the field" },
+        include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after typing." },
       },
       required: ["session_id", "text"],
     },
   },
   {
     name: "husk_scroll",
-    description: "Husk — Scroll the page or an element. Pass EITHER {stable_id} (exact, may be null for window scroll), {intent} (natural language like \"main content area\"), or omit both for a plain window scroll. On unresolved intent returns {ok:false, reason:\"no_match\"}. Result includes a `diff` field showing what's now visible.",
+    description: "Husk — Scroll the page or an element. Pass EITHER {stable_id} (exact, may be null for window scroll), {intent} (natural language like \"main content area\"), or omit both for a plain window scroll. On unresolved intent returns {ok:false, reason:\"no_match\"}.\n\nWHAT YOU GET: {ok, diff, warnings, snapshot} — the `snapshot` field contains the FULL post-scroll page state (AX tree + signature + meta + forms + network + console + summary + session_history) showing what's now in view. DO NOT call husk_snapshot after scrolling — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -90,18 +93,20 @@ export const TOOL_SURFACE: ToolSpec[] = [
         intent: { type: "string", description: "Natural language description of the element to scroll, e.g. \"comments section\". Pass either stable_id or intent." },
         direction: { type: "string", enum: ["up", "down", "left", "right", "into_view"] },
         amount: { type: "number", description: "Pixels to scroll (ignored for into_view)" },
+        include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after scrolling." },
       },
       required: ["session_id", "direction", "amount"],
     },
   },
   {
     name: "husk_press_key",
-    description: "Husk — Press a single key (Enter, Tab, Escape, ArrowUp/Down/Left/Right, Backspace, Space). Result includes a `diff` field showing what changed after the keypress.",
+    description: "Husk — Press a single key (Enter, Tab, Escape, ArrowUp/Down/Left/Right, Backspace, Space).\n\nWHAT YOU GET: {ok, diff, warnings, snapshot} — the `snapshot` field contains the FULL post-keypress page state (AX tree + signature + meta + forms + network + console + summary + session_history). DO NOT call husk_snapshot after pressing a key — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         key: { type: "string" },
+        include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after the keypress." },
       },
       required: ["session_id", "key"],
     },
@@ -136,7 +141,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_login",
-    description: "Husk — Log into a website. THIS IS THE TOOL TO USE FOR ANY LOGIN FORM. It locates username/password/submit fields, fills them, submits the form, and verifies. Two modes: (A) inline — pass {username, password, totp_secret?} directly (ephemeral, not stored); (B) lookup — pass {profile, key} to read previously-stored credentials. Use mode A when the user gives you credentials in chat; mode B when reusing saved ones. Returns { ok, url_before, url_after } on success or { ok: false, reason } on failure. Prefer this over husk_type/husk_click for login flows — those fail on password fields with the bundled engine.",
+    description: "Husk — Log into a website. THIS IS THE TOOL TO USE FOR ANY LOGIN FORM. It locates username/password/submit fields, fills them, submits the form, and verifies. Two modes: (A) inline — pass {username, password, totp_secret?} directly (ephemeral, not stored); (B) lookup — pass {profile, key} to read previously-stored credentials. Use mode A when the user gives you credentials in chat; mode B when reusing saved ones. Prefer this over husk_type/husk_click for login flows — those fail on password fields with the bundled engine.\n\nWHAT YOU GET: {ok, url_before, url_after, snapshot} — the `snapshot` field contains the FULL post-login page state (AX tree + signature + meta + forms + network + console + summary + session_history) so you can immediately see the logged-in state. DO NOT call husk_snapshot after login — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-login state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -146,6 +151,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
         totp_secret: { type: "string", description: "Mode A: optional base32 TOTP secret for 2FA" },
         profile: { type: "string", description: "Mode B: credential profile name (used with `key`)" },
         key: { type: "string", description: "Mode B: credential key, typically a hostname (used with `profile`)" },
+        include_snapshot: { type: "boolean", description: "Include post-login snapshot in result. Default true. Pass false to save tokens if you don't need the logged-in page state." },
       },
       required: ["session_id"],
     },
@@ -228,7 +234,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_upload",
-    description: "Upload a file to a <input type=\"file\"> element. Pass EITHER {stable_id} OR {intent} to target the input. File contents come from EITHER {file_path} (absolute or relative path) OR {content_base64, filename}. Routes through the watchdog (rejects if the element isn't found or is disabled). Returns {ok, reason?, candidates?}.",
+    description: "Upload a file to a <input type=\"file\"> element. Pass EITHER {stable_id} OR {intent} to target the input. File contents come from EITHER {file_path} (absolute or relative path) OR {content_base64, filename}. Routes through the watchdog (rejects if the element isn't found or is disabled).\n\nWHAT YOU GET: {ok, reason?, candidates?, snapshot} — the `snapshot` field contains the FULL post-upload page state (AX tree + signature + meta + forms + network + console + summary + session_history). DO NOT call husk_snapshot after uploading — this snapshot field already contains everything. Pass include_snapshot:false ONLY if you need to save tokens AND don't need the post-state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -238,6 +244,7 @@ export const TOOL_SURFACE: ToolSpec[] = [
         file_path: { type: "string" },
         content_base64: { type: "string" },
         filename: { type: "string" },
+        include_snapshot: { type: "boolean", description: "Include post-action snapshot in result. Default true. Pass false to save tokens if you don't need the page state after uploading." },
       },
       required: ["session_id"],
     },

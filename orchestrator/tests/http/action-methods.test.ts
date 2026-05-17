@@ -37,28 +37,28 @@ describe("HTTP action methods", () => {
 
   it("click forwards stable_id as Target object to Session.click", async () => {
     const res = await METHODS.click({ session_id: sessionId, stable_id: "button:s" }, ctx);
-    expect(click).toHaveBeenCalledWith({ stable_id: "button:s", intent: undefined });
+    expect(click).toHaveBeenCalledWith({ stable_id: "button:s", intent: undefined, include_snapshot: undefined });
     expect(res).toEqual({ ok: true, warnings: [] });
   });
 
   it("click forwards intent as Target object to Session.click", async () => {
     await METHODS.click({ session_id: sessionId, intent: "sign in button" }, ctx);
-    expect(click).toHaveBeenCalledWith({ stable_id: undefined, intent: "sign in button" });
+    expect(click).toHaveBeenCalledWith({ stable_id: undefined, intent: "sign in button", include_snapshot: undefined });
   });
 
   it("type forwards stable_id + text as Target object", async () => {
     await METHODS.type({ session_id: sessionId, stable_id: "textbox:e", text: "hello" }, ctx);
-    expect(type_).toHaveBeenCalledWith({ stable_id: "textbox:e", intent: undefined }, "hello");
+    expect(type_).toHaveBeenCalledWith({ stable_id: "textbox:e", intent: undefined, include_snapshot: undefined }, "hello");
   });
 
   it("scroll accepts null stable_id (window scroll) as Target object", async () => {
     await METHODS.scroll({ session_id: sessionId, stable_id: null, direction: "down", amount: 300 }, ctx);
-    expect(scroll).toHaveBeenCalledWith({ stable_id: null, intent: undefined }, "down", 300);
+    expect(scroll).toHaveBeenCalledWith({ stable_id: null, intent: undefined, include_snapshot: undefined }, "down", 300);
   });
 
   it("press_key forwards the key string", async () => {
     await METHODS.press_key({ session_id: sessionId, key: "Enter" }, ctx);
-    expect(press).toHaveBeenCalledWith("Enter");
+    expect(press).toHaveBeenCalledWith("Enter", { include_snapshot: undefined });
   });
 
   it("returns the rejection envelope verbatim when watchdog rejects", async () => {

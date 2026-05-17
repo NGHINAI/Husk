@@ -6,7 +6,7 @@ import type { MethodContext } from "../../src/http/methods.js";
 
 function fakeSessionMgr(): SessionManager {
   return new SessionManager(async () => ({
-    goto: async () => {},
+    goto: async () => ({ ok: true as const }),
     snapshot: async () => ({ v: 1, url: "x", count: 0, root: { i: "", r: "", n: "", s: [] } }),
     snapshotDiff: async () => null,
     close: async () => {},
@@ -72,7 +72,7 @@ describe("dispatch", () => {
       c
     );
     if (!("result" in goto_res)) throw new Error("expected result");
-    expect(goto_res.result).toEqual({ ok: true });
+    expect(goto_res.result).toMatchObject({ ok: true });
   });
 
   it("maps method-thrown InvalidUrlError to JSON-RPC error code -32004", async () => {

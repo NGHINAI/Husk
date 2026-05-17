@@ -78,6 +78,9 @@ export interface Warning {
 
 export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
 
+/** ActionResult widened with the post-action snapshot (present by default, absent when include_snapshot:false). */
+export type ActionResultWithSnapshot<T = ActionResult> = T & { snapshot?: Snapshot };
+
 // ----- Policy types (parsed server-side via set_policy; SDK sends raw YAML) -----
 
 export type Severity = "hard" | "warn";

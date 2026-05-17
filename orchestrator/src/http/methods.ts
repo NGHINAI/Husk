@@ -42,6 +42,7 @@ export interface CreateSessionResult {
 /** Result of `goto`. */
 export interface GotoResult {
   ok: true;
+  snapshot?: import("../snapshot/types.js").Snapshot;
 }
 
 /** Result of `close_session`. Also returned when the id was unknown (idempotent). */
@@ -71,7 +72,7 @@ export const METHODS = {
   },
 
   async goto(
-    params: { session_id: string; url: string },
+    params: { session_id: string; url: string; include_snapshot?: boolean },
     ctx: MethodContext
   ): Promise<GotoResult> {
     if (typeof params.url !== "string") throw new InvalidUrlError(String(params.url));
@@ -82,8 +83,7 @@ export const METHODS = {
       throw new InvalidUrlError(params.url);
     }
     const session = ctx.sessions.get(params.session_id);
-    await session.goto(params.url);
-    return { ok: true };
+    return session.goto(params.url, { include_snapshot: params.include_snapshot });
   },
 
   async snapshot(
@@ -111,35 +111,35 @@ export const METHODS = {
   },
 
   async click(
-    params: { session_id: string; stable_id?: string; intent?: string },
+    params: { session_id: string; stable_id?: string; intent?: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.click({ stable_id: params.stable_id, intent: params.intent });
+    return await session.click({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot });
   },
 
   async type(
-    params: { session_id: string; stable_id?: string; intent?: string; text: string },
+    params: { session_id: string; stable_id?: string; intent?: string; text: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.type({ stable_id: params.stable_id, intent: params.intent }, params.text);
+    return await session.type({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot }, params.text);
   },
 
   async scroll(
-    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
+    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.scroll({ stable_id: params.stable_id, intent: params.intent }, params.direction, params.amount);
+    return await session.scroll({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot }, params.direction, params.amount);
   },
 
   async press_key(
-    params: { session_id: string; key: string },
+    params: { session_id: string; key: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.press_key(params.key);
+    return await session.press_key(params.key, { include_snapshot: params.include_snapshot });
   },
 
   async set_policy(
@@ -230,6 +230,7 @@ export const METHODS = {
       username?: string;
       password?: string;
       totp_secret?: string;
+      include_snapshot?: boolean;
     },
     ctx: MethodContext
   ) {
@@ -241,6 +242,7 @@ export const METHODS = {
         username: params.username,
         password: params.password,
         totp_secret: params.totp_secret,
+        include_snapshot: params.include_snapshot,
       });
     }
 
@@ -254,6 +256,7 @@ export const METHODS = {
         username: cred.username,
         password: cred.password,
         totp_secret: cred.totp_secret,
+        include_snapshot: params.include_snapshot,
       });
     }
 
@@ -290,12 +293,13 @@ export const METHODS = {
       file_path?: string;
       content_base64?: string;
       filename?: string;
+      include_snapshot?: boolean;
     },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
     return session.upload(
-      { stable_id: params.stable_id, intent: params.intent },
+      { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
       { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
     );
   },

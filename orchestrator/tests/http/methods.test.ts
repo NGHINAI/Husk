@@ -6,7 +6,7 @@ import type { Session } from "../../src/session/session.js";
 
 function fakeSession(overrides: Partial<Session> = {}): Session {
   const base = {
-    goto: vi.fn(async () => {}),
+    goto: vi.fn(async () => ({ ok: true as const })),
     snapshot: vi.fn(async () => ({
       v: 1,
       url: "https://example.com",
@@ -56,7 +56,7 @@ describe("goto", () => {
     const { ctx, mgr, created } = buildCtx();
     const id = await mgr.create();
     await METHODS.goto({ session_id: id, url: "https://example.com/" }, ctx);
-    expect(created[0].goto).toHaveBeenCalledWith("https://example.com/");
+    expect(created[0].goto).toHaveBeenCalledWith("https://example.com/", { include_snapshot: undefined });
   });
 
   it("throws SessionNotFoundError for unknown session", async () => {

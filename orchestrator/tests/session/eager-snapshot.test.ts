@@ -98,7 +98,8 @@ describe("eager snapshot in goto", () => {
     };
     const session = Session.fromInjected({ engine: { close: async () => {} }, cdp, sessionId: "s1" });
     // Should not throw despite the first AX-tree call failing.
-    await expect(session.goto("https://x.test/")).resolves.toBeUndefined();
+    // goto now returns { ok: true } (no longer void), so just verify it resolves.
+    await expect(session.goto("https://x.test/")).resolves.toBeDefined();
     // Manual snapshot afterward should still work.
     const snap = await session.snapshot({ force: true });
     expect(snap.url).toBe("https://x.test/");

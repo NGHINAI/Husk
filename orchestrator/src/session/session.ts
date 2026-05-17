@@ -86,6 +86,9 @@ export type ActionResultWithIntent =
   | ActionResult
   | { ok: false; reason: "no_match" | "ambiguous_intent" | "missing_target"; candidates: FindCandidate[] };
 
+/** Any action result (including intent failures) optionally widened with post-action snapshot. */
+export type ActionResultWithSnapshot<T> = T & { snapshot?: Snapshot };
+
 /** Normalize CDP console.type / Log.level strings to our ConsoleLevel enum. */
 function normalizeConsoleLevel(t?: string): ConsoleLevel {
   switch (t) {
@@ -240,7 +243,7 @@ export class Session {
     return inst;
   }
 
-  async goto(url: string): Promise<void> {
+  async goto(url: string, opts: { include_snapshot?: boolean } = {}): Promise<{ ok: true; snapshot?: Snapshot }> {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
     // Track goto in history (no target_name for navigation)
@@ -266,6 +269,10 @@ export class Session {
     } catch {
       // best-effort
     }
+    // Post-goto snapshot: include_snapshot defaults to true for goto.
+    // The eager snapshot above already cached the result, so this is a free cache hit.
+    const doSnap = opts.include_snapshot !== false;
+    return this.withSnapshot({ ok: true as const }, doSnap);
   }
 
   async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" | "visible"; include_image?: boolean; full_page?: boolean } = {}): Promise<Snapshot> {
@@ -636,6 +643,28 @@ export class Session {
   }
 
   // ---------------------------------------------------------------------------
+  // Private helper — attach post-action snapshot to any result.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Attach a post-action snapshot to `result` unless `include_snapshot` is false.
+   * Uses force:false (M9 cache) — typically free since the action already called
+   * snapshot({ force: true }) and cached the result. Graceful degrade on error.
+   */
+  private async withSnapshot<T extends object>(
+    result: T,
+    include: boolean
+  ): Promise<T & { snapshot?: Snapshot }> {
+    if (!include) return result;
+    try {
+      const snap = await this.snapshot({ force: false });
+      return { ...result, snapshot: snap };
+    } catch {
+      return result;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Public action methods — accept Target (stable_id | intent) or plain string.
   // ---------------------------------------------------------------------------
 
@@ -646,58 +675,78 @@ export class Session {
    *
    * Also accepts a bare `string` for backwards-compatible call sites
    * (e.g. internal login-flow). All new call sites should pass a Target object.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot
+   * (saves tokens when you don't need post-state).
    */
-  async click(target: Target | string): Promise<ActionResultWithIntent> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  async click(target: (Target & { include_snapshot?: boolean }) | string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     // resolved.stable_id is string | null; click always requires a real id.
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performClick(resolved.stable_id);
+    const result = await this.performClick(resolved.stable_id);
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
    * Type into a text field. Pass `{ stable_id }` or `{ intent }` as the target.
    *
    * Also accepts a bare `string` stable_id for backwards compatibility.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
-  async type(target: Target | string, text: string): Promise<ActionResultWithIntent> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  async type(target: (Target & { include_snapshot?: boolean }) | string, text: string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performType(resolved.stable_id, text);
+    const result = await this.performType(resolved.stable_id, text);
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
    * Scroll the page or an element. Pass `{ stable_id }` (may be null for
    * window scroll), `{ intent }`, or a bare `string | null`.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
-  async scroll(target: Target | string | null, direction: ScrollDirection, amount: number): Promise<ActionResultWithIntent> {
-    let t: Target;
+  async scroll(target: (Target & { include_snapshot?: boolean }) | string | null, direction: ScrollDirection, amount: number): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    let raw: (Target & { include_snapshot?: boolean }) | null;
     if (target === null) {
-      t = { stable_id: null };
+      raw = { stable_id: null };
     } else if (typeof target === "string") {
-      t = { stable_id: target };
+      raw = { stable_id: target };
     } else {
-      t = target;
+      raw = target;
     }
-    const resolved = await this.resolveTarget(t);
+    const { include_snapshot, ...tTarget } = (raw ?? { stable_id: null }) as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
-    return this.performScroll(resolved.stable_id, direction, amount);
+    const result = await this.performScroll(resolved.stable_id, direction, amount);
+    return this.withSnapshot(result, doSnap);
   }
 
-  async press_key(key: string): Promise<ActionResult> {
+  /**
+   * Press a key. Pass `include_snapshot: false` to opt out of the post-action snapshot.
+   */
+  async press_key(key: string, opts: { include_snapshot?: boolean } = {}): Promise<ActionResultWithSnapshot<ActionResult>> {
+    const doSnap = opts.include_snapshot !== false;
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "press_key", null);
     if (!pre.ok) {
@@ -710,7 +759,7 @@ export class Session {
         ok: false,
         ts: Date.now(),
       });
-      return envelope;
+      return this.withSnapshot(envelope, doSnap);
     }
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
@@ -732,7 +781,7 @@ export class Session {
       ts: Date.now(),
       url_after: this.currentUrl,
     });
-    return result;
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
@@ -742,23 +791,29 @@ export class Session {
    * `{ content_base64, filename }` (base64-encoded bytes with a suggested name).
    * Routes through the M5 watchdog — rejects if the element is not found or
    * is disabled.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
   async upload(
-    target: Target | string,
+    target: (Target & { include_snapshot?: boolean }) | string,
     fileSpec: { file_path?: string; content_base64?: string; filename?: string },
-  ): Promise<UploadResult & { candidates?: FindCandidate[] }> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  ): Promise<ActionResultWithSnapshot<UploadResult & { candidates?: FindCandidate[] }>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performUpload(resolved.stable_id, fileSpec);
+    const result = await this.performUpload(resolved.stable_id, fileSpec);
+    return this.withSnapshot(result, doSnap);
   }
 
-  async login(input: LoginInput & { totp_secret?: string }): Promise<LoginResult> {
+  async login(input: LoginInput & { totp_secret?: string; include_snapshot?: boolean }): Promise<ActionResultWithSnapshot<LoginResult>> {
+    const doSnap = input.include_snapshot !== false;
     const code = input.totp_code ?? (input.totp_secret ? totpCode(input.totp_secret) : undefined);
     const result = await performLogin(
       {
@@ -785,7 +840,7 @@ export class Session {
           ts: Date.now(),
           url_after: this.currentUrl,
         });
-        return jsResult;
+        return this.withSnapshot(jsResult, doSnap);
       }
     }
 
@@ -798,7 +853,7 @@ export class Session {
       url_after: this.currentUrl,
     });
 
-    return result;
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
