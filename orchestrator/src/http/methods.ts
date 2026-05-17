@@ -5,6 +5,7 @@ import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 import type { WaitForCondition, WaitForResult } from "../session/wait.js";
+import type { PaginateOpts } from "../session/paginate.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -220,15 +221,23 @@ export const METHODS = {
   },
 
   async extract(
-    params: { session_id: string; css?: string; selectors?: Record<string, string> },
+    params: { session_id: string; css?: string; selectors?: Record<string, string>; paginate?: PaginateOpts },
     ctx: MethodContext
-  ): Promise<{ text?: string | null; result?: Record<string, string | null> }> {
+  ): Promise<{ text?: string | null; result?: Record<string, string | null>; pages?: unknown[]; total_pages?: number; stopped_reason?: string }> {
     const session = ctx.sessions.get(params.session_id);
     if (params.selectors) {
+      if (params.paginate) {
+        const paginateResult = await session.extract({ selectors: params.selectors, paginate: params.paginate });
+        return paginateResult as { pages: unknown[]; total_pages: number; stopped_reason: string };
+      }
       const result = await session.extract({ selectors: params.selectors });
       return { result: result as Record<string, string | null> };
     }
     if (params.css) {
+      if (params.paginate) {
+        const paginateResult = await session.extract({ css: params.css, paginate: params.paginate });
+        return paginateResult as { pages: unknown[]; total_pages: number; stopped_reason: string };
+      }
       const text = await session.extract({ css: params.css });
       return { text: text as string | null };
     }

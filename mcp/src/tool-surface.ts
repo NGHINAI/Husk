@@ -196,13 +196,42 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_extract",
-    description: "Husk — Extract text from the current page by CSS selector(s). EITHER pass {css} for a single selector (returns string|null), OR {selectors: {key: css, ...}} for multi-field extraction in ONE round-trip (returns {key: text|null}). Each selector is independently safe — one broken selector won't fail others. Use {selectors} when you need >1 field from a page; faster than N calls. ~100ms and a few hundred bytes vs ~1.5s and ~10-50KB for snapshot.",
+    description: "husk_extract — Read text content from the page.\n\nWHEN TO USE:\n- {css}: single selector → returns string|null. Use when you need ONE field.\n- {selectors}: map of name→css → returns {name: text|null}. ONE round-trip per call. Use when you need multiple fields from one page.\n- {selectors OR css} + {paginate: {next: {intent|stable_id}, max_pages?: 10, stop_when?: <wait_for_condition>}}: extracts the same fields ACROSS multiple pages — clicks the `next` element between pages and waits for the next page to settle. ONE tool call replaces a 10-turn extract+click loop.\n\nWHAT YOU GET:\n- Single mode: string|null\n- Multi mode: {key: text|null}\n- Paginate mode: {pages: [results_per_page], total_pages, stopped_reason: \"max_pages\"|\"stop_when\"|\"next_disappeared\"|\"click_failed\"}\n\nDO NOT manually loop extract + click — pass paginate instead.\n\nExample:\nhusk_extract({session_id, selectors: {title: \"h2.title\", price: \".price\"}, paginate: {next: {intent: \"Next page\"}, max_pages: 5}})\n→ returns all titles+prices across up to 5 pages in one call.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         css: { type: "string", description: "Mode A: CSS selector (single-selector mode). The first matching element's textContent is returned." },
         selectors: { type: "object", additionalProperties: { type: "string" }, description: "Mode B: Map of key to CSS selector (multi-selector mode). Returns {key: text|null}." },
+        paginate: {
+          type: "object",
+          description: "Mode C: Paginate across multiple pages. Clicks `next` between each extract and waits for the page to settle. Returns {pages, total_pages, stopped_reason}.",
+          properties: {
+            next: {
+              type: "object",
+              description: "Target for the next-page element. Pass either {intent} (natural language) or {stable_id} (exact id from snapshot).",
+              properties: {
+                intent: { type: "string", description: "Natural language description of the next-page button, e.g. \"Next page\"." },
+                stable_id: { type: "string", description: "Exact stable id of the next-page element from a snapshot." },
+              },
+            },
+            max_pages: { type: "number", description: "Maximum number of pages to collect. Default 10." },
+            stop_when: {
+              type: "object",
+              description: "Optional condition to stop pagination early (same set as husk_wait_for). Checked after each click.",
+              properties: {
+                text: { type: "string" },
+                role: { type: "string" },
+                name: { type: "string" },
+                url_matches: { type: "string" },
+                network_idle: { type: "number" },
+                selector_visible: { type: "string" },
+                timeout_ms: { type: "number" },
+              },
+            },
+          },
+          required: ["next"],
+        },
       },
       required: ["session_id"],
     },

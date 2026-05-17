@@ -8,6 +8,8 @@ import type {
   WaitForCondition,
   WaitForResult,
   UploadResult,
+  PaginateOpts,
+  PaginateResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -112,17 +114,27 @@ export class Session {
   }
 
   /**
-   * Extract text from the page.
-   * Pass EITHER {css: string} for single selector (returns string|null),
-   * OR {selectors: {key: css}} for multi-field extraction (returns {key: text|null}).
-   * Multi-selector mode completes in one round-trip.
+   * Extract text from the page. Three modes:
+   *
+   * - `{css}` → single selector, returns `string | null`.
+   * - `{selectors}` → multi-field map, returns `{key: text | null}`. One round-trip.
+   * - `{css|selectors, paginate}` → extracts across multiple pages using a click-next
+   *   loop. Returns `{pages, total_pages, stopped_reason}`.
+   *
+   * DO NOT manually loop extract + click — pass `paginate` instead.
    */
   async extract(input: { css: string }): Promise<string | null>;
   async extract(input: { selectors: Record<string, string> }): Promise<Record<string, string | null>>;
+  async extract(input: { css: string; paginate: PaginateOpts }): Promise<PaginateResult>;
+  async extract(input: { selectors: Record<string, string>; paginate: PaginateOpts }): Promise<PaginateResult>;
   async extract(
-    input: { css: string } | { selectors: Record<string, string> }
-  ): Promise<string | null | Record<string, string | null>> {
+    input:
+      | { css: string; paginate?: PaginateOpts }
+      | { selectors: Record<string, string>; paginate?: PaginateOpts }
+  ): Promise<string | null | Record<string, string | null> | PaginateResult> {
     const result = await this.client.call<any>("extract", { session_id: this.id, ...input });
+    // Paginate mode returns pages/total_pages/stopped_reason directly.
+    if ("pages" in result) return result as PaginateResult;
     return result.result ?? result.text ?? result;
   }
 

@@ -199,3 +199,22 @@ export interface UploadResult {
   reason?: string;
   candidates?: Candidate[];
 }
+
+// ----- husk_extract paginate types -----
+
+export interface PaginateOpts {
+  /** Target for the next-page element. Pass {intent} or {stable_id}. */
+  next: { stable_id?: string; intent?: string };
+  /** Maximum pages to collect. Default 10. */
+  max_pages?: number;
+  /** Optional condition to stop pagination early (same set as WaitForCondition). */
+  stop_when?: WaitForCondition;
+}
+
+export type StoppedReason = "max_pages" | "stop_when" | "next_disappeared" | "click_failed";
+
+export interface PaginateResult<T = unknown> {
+  pages: T[];
+  total_pages: number;
+  stopped_reason: StoppedReason;
+}

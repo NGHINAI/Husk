@@ -284,12 +284,24 @@ class Session:
         *,
         css: Optional[str] = None,
         selectors: Optional[dict[str, str]] = None,
-    ) -> Optional[str] | dict[str, Optional[str]]:
-        """Extract text from the page.
+        paginate: Optional[dict] = None,
+    ) -> Optional[str] | dict[str, Optional[str]] | dict:
+        """Extract text from the page. Three modes:
 
-        Pass EITHER ``css`` for single selector (returns string|None),
-        OR ``selectors`` dict for multi-field extraction (returns {key: text|None}).
-        Multi-selector mode completes in one round-trip.
+        - ``css``: single selector → returns string|None.
+        - ``selectors``: multi-field map → returns {key: text|None}. One round-trip.
+        - ``css|selectors`` + ``paginate``: click-next pagination loop → returns
+          {pages, total_pages, stopped_reason}. Replaces manual extract+click loops.
+
+        ``paginate`` shape::
+
+            {
+                "next": {"intent": "Next page"},  # or {"stable_id": "..."}
+                "max_pages": 10,                  # optional, default 10
+                "stop_when": {"text": "End"},     # optional WaitForCondition
+            }
+
+        DO NOT manually loop extract + click — pass ``paginate`` instead.
         """
         params: dict[str, Any] = {"session_id": self._id}
         if css is not None:
@@ -298,7 +310,12 @@ class Session:
             params["selectors"] = selectors
         if css is None and selectors is None:
             raise ValueError("extract requires either 'css' or 'selectors'")
+        if paginate is not None:
+            params["paginate"] = paginate
         result = await self._client.call("extract", params)
+        # Paginate mode returns pages/total_pages/stopped_reason directly.
+        if "pages" in result:
+            return result
         if "result" in result:
             return result["result"]
         if "text" in result:

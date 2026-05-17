@@ -16,6 +16,7 @@ import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
 import { runExtract, type ExtractQuery } from "./extract.js";
+import { runPaginate, type PaginateResult } from "./paginate.js";
 import { runWaitFor, type WaitForCondition, type WaitForResult } from "./wait.js";
 import { runUpload, type UploadResult } from "./upload.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
@@ -1045,7 +1046,37 @@ export class Session {
     }
   }
 
-  async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null>> {
+  async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null> | PaginateResult> {
+    // Paginate mode: when paginate option is present, run the click-next loop.
+    if (query.paginate) {
+      const paginateOpts = query.paginate;
+      // Build a session-like object for runPaginate using this session's methods.
+      const paginateSession = {
+        extractOnce: async () => {
+          if ("selectors" in query && query.selectors) {
+            return runExtract(this.cdp, this.sessionId, { selectors: query.selectors });
+          }
+          if ("css" in query && query.css) {
+            return runExtract(this.cdp, this.sessionId, { css: query.css });
+          }
+          throw new Error("extract with paginate requires either css or selectors");
+        },
+        click: (target: { stable_id?: string; intent?: string }) =>
+          this.click({ ...target, include_snapshot: false }),
+        waitFor: (c: WaitForCondition) => this.waitFor(c),
+      };
+      const result = await runPaginate(paginateSession, paginateOpts);
+      this.historyBuffer.add({
+        verb: "extract",
+        target_name: null,
+        ok: true,
+        ts: Date.now(),
+        url_after: this.currentUrl,
+      });
+      return result;
+    }
+
+    // Single-page extract (existing behavior).
     const result = await runExtract(this.cdp, this.sessionId, query);
     // Track extract in history (success is determined by result not being null)
     const ok = result !== null;
