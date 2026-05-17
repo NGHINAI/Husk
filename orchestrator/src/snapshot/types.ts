@@ -60,7 +60,8 @@ export interface SnapshotNode {
 export interface SnapshotNetwork {
   /** Recent network requests captured via CDP (ring buffer, last 100 per session). */
   recent: import("../session/network-buffer.js").NetworkEntry[];
-  // likely_api_endpoints added in T10
+  /** T10: Filtered, deduped list of requests that look like REST/GraphQL API calls. */
+  likely_api_endpoints: import("./api-hints.js").ApiHint[];
 }
 export type FormSchema = import("./forms.js").FormSchema;
 export type FormField = import("./forms.js").FormField;

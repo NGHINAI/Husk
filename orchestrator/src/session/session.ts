@@ -30,6 +30,7 @@ import type { WatchBus } from "../watch/sse.js";
 import type { WatchEvent } from "../watch/events.js";
 import { filterVisible } from "../snapshot/visible.js";
 import { captureScreenshot } from "../snapshot/screenshot.js";
+import { deriveApiHints } from "../snapshot/api-hints.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -322,8 +323,12 @@ export class Session {
       }
     }
 
-    // M14 T2: Attach network ring buffer to snapshot.
-    snap.network = { recent: this.networkBuffer.recent() };
+    // M14 T2 + T10: Attach network ring buffer and derived API hints to snapshot.
+    const networkRecent = this.networkBuffer.recent();
+    snap.network = {
+      recent: networkRecent,
+      likely_api_endpoints: deriveApiHints(networkRecent),
+    };
 
     // M14 T3: Attach console buffer to snapshot.
     snap.console = this.consoleBuffer.recent();
