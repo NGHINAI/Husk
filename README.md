@@ -2,12 +2,10 @@
 
 **The only OSS browser engine where your agent cannot click a button that doesn't exist.**
 
-Browser engine for AI agents — forked from [lightpanda](https://lightpanda.io)
-(Zig, no paint pipeline), wrapped in a TypeScript orchestrator and Python SDK,
+Browser engine for AI agents, wrapped in a TypeScript orchestrator and Python SDK,
 with a deterministic watchdog that physically blocks hallucinated actions.
 
 License: AGPL v3 (core) · MIT (examples + protocol)
-Status: pre-v0 (Milestone 1 — Foundation)
 
 ---
 
