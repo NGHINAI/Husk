@@ -4,7 +4,7 @@ import { waitForPageReady } from "./page-ready.js";
 import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
-import { computeSignature } from "../snapshot/signature.js";
+import { computeSignature, type AxLite } from "../snapshot/signature.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
@@ -199,7 +199,7 @@ export class Session {
     // networkUrls is populated by T2/T10; for now, empty list.
     const networkUrls: string[] = [];
     snap.signature = computeSignature({
-      root: snap.root as unknown as { i: string; r: string; n: string; c?: unknown[] },
+      root: snap.root as unknown as AxLite,
       url: snap.url,
       networkUrls,
     });

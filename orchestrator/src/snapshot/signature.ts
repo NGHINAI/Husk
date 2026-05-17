@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
  * Lightweight representation of a SnapshotNode for signature computation.
  * Only includes the stable ID field (i) and recursively processes children.
  */
-interface AxLite {
+export interface AxLite {
   i: string;
   r: string;
   n: string;

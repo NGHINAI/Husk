@@ -43,4 +43,14 @@ describe("computeSignature", () => {
     const b = computeSignature({ root: { i: "r", r: "root", n: "" }, url: "/", networkUrls: ["a", "b"] });
     expect(a.network_fingerprint).toBe(b.network_fingerprint);
   });
+
+  it("hashes are exactly 16 hex chars", () => {
+    const s = computeSignature({
+      root: { i: "r", r: "root", n: "" },
+      url: "/",
+      networkUrls: ["a", "b"],
+    });
+    expect(s.dom_hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(s.network_fingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
 });
