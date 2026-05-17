@@ -1,16 +1,25 @@
+import type { PaginateOpts } from "./paginate.js";
+
 export interface ExtractSingle {
   /** CSS selector. Single-selector mode. */
   css: string;
   selectors?: never;
+  /** Paginate across multiple pages using click-next loop. */
+  paginate?: PaginateOpts;
 }
 
 export interface ExtractMulti {
   /** Map of key to CSS selector. Multi-selector mode returns {key: text | null}. */
   selectors: Record<string, string>;
   css?: never;
+  /** Paginate across multiple pages using click-next loop. */
+  paginate?: PaginateOpts;
 }
 
 export type ExtractQuery = ExtractSingle | ExtractMulti;
+
+/** Re-export PaginateResult so callers can reference it via extract.ts. */
+export type { PaginateResult, PaginateOpts } from "./paginate.js";
 
 export interface CdpLike {
   send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<unknown>;

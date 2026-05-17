@@ -1,4 +1,5 @@
 import { jaroWinkler } from "../watchdog/candidates.js";
+import type { SiteGraphCache } from "../cache/site-graph.js";
 
 const ROLE_HINTS: Record<string, string> = {
   button: "button", btn: "button", link: "link", text: "textbox",
@@ -18,11 +19,25 @@ const SCORE_THRESHOLD = 0.55;
 
 export interface FindInput { intent: string; }
 
+/**
+ * A named subdivision of the visible viewport (3×3 grid).
+ * Used in FindCandidate.viewport.region to let agents disambiguate by
+ * visual location ("the one near top-left").
+ */
+export type ViewportRegion =
+  | "top-left" | "top-center" | "top-right"
+  | "center-left" | "center" | "center-right"
+  | "bottom-left" | "bottom-center" | "bottom-right";
+
 export interface FindCandidate {
   stable_id: string;
   role: string;
   name: string;
   score: number;
+  /** Viewport position of this candidate — populated by the call-site
+   *  (Session.resolveTarget) after CDP DOM.getBoxModel lookup.
+   *  Absent when the caller did not request viewport enrichment. */
+  viewport?: { x: number; y: number; region: ViewportRegion };
 }
 
 export interface FindResult {
@@ -33,6 +48,10 @@ export interface FindResult {
 export interface FindContext {
   snapshot: { nodes: Array<{ i: string; r: string; n: string }> };
   cache: null | { query(role: string, nameNorm: string): Array<{ stable_id: string; role: string; name: string }> };
+  /** Optional SiteGraphCache for reliability-weighted ranking. */
+  siteGraphCache?: SiteGraphCache;
+  /** Domain (hostname) for reliability lookup. Required when siteGraphCache is set. */
+  domain?: string;
 }
 
 function normalize(s: string): string {
@@ -80,6 +99,25 @@ function compositeScore(targetName: string, nodeNorm: string): number {
   return Math.sqrt(fullScore * avgTokenScore);
 }
 
+/**
+ * Classify a (x, y) point — expressed as fractions of viewport size in [0, 1]
+ * — into one of nine named viewport regions (3×3 grid).
+ *
+ * Boundaries: x < 0.33 → left, x < 0.66 → center, else right;
+ *             y < 0.33 → top,  y < 0.66 → center, else bottom.
+ * When both axes land in "center", the result is "center".
+ *
+ * This is a pure function with no I/O — safe to test independently.
+ */
+export function classifyRegion(x: number, y: number): ViewportRegion {
+  const col = x < 0.33 ? "left" : x < 0.66 ? "center" : "right";
+  const row = y < 0.33 ? "top"  : y < 0.66 ? "center" : "bottom";
+  if (row === "center" && col === "center") return "center";
+  if (row === "center") return `center-${col}` as ViewportRegion;
+  if (col === "center") return `${row}-center` as ViewportRegion;
+  return `${row}-${col}` as ViewportRegion;
+}
+
 export async function runFind(ctx: FindContext, input: FindInput): Promise<FindResult> {
   const norm = normalize(input.intent);
   const tokens = norm.split(" ").filter(Boolean);
@@ -98,6 +136,19 @@ export async function runFind(ctx: FindContext, input: FindInput): Promise<FindR
     }
   }
   scored.sort((a, b) => b.score - a.score);
+
+  // Reliability weighting: self-healing route ranking using M4 cache history.
+  // Applies: score *= (0.5 + 0.5 * reliability)
+  // A neutral-prior selector (unseen, reliability = 0.5) is multiplied by 0.75 —
+  // never penalized relative to a fully-reliable one (multiplied by 1.0).
+  if (ctx.siteGraphCache && ctx.domain) {
+    for (const c of scored) {
+      const rel = ctx.siteGraphCache.reliability(ctx.domain, c.stable_id);
+      c.score = Math.min(1, c.score * (0.5 + 0.5 * rel));
+    }
+    scored.sort((a, b) => b.score - a.score);
+  }
+
   const top = scored.slice(0, 3);
   return { ok: top.length > 0, candidates: top };
 }

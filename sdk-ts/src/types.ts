@@ -78,6 +78,9 @@ export interface Warning {
 
 export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
 
+/** ActionResult widened with the post-action snapshot (present by default, absent when include_snapshot:false). */
+export type ActionResultWithSnapshot<T = ActionResult> = T & { snapshot?: Snapshot };
+
 // ----- Policy types (parsed server-side via set_policy; SDK sends raw YAML) -----
 
 export type Severity = "hard" | "warn";
@@ -195,4 +198,23 @@ export interface UploadResult {
   ok: boolean;
   reason?: string;
   candidates?: Candidate[];
+}
+
+// ----- husk_extract paginate types -----
+
+export interface PaginateOpts {
+  /** Target for the next-page element. Pass {intent} or {stable_id}. */
+  next: { stable_id?: string; intent?: string };
+  /** Maximum pages to collect. Default 10. */
+  max_pages?: number;
+  /** Optional condition to stop pagination early (same set as WaitForCondition). */
+  stop_when?: WaitForCondition;
+}
+
+export type StoppedReason = "max_pages" | "stop_when" | "next_disappeared" | "click_failed";
+
+export interface PaginateResult<T = unknown> {
+  pages: T[];
+  total_pages: number;
+  stopped_reason: StoppedReason;
 }

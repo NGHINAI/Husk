@@ -92,7 +92,7 @@ async def test_type_scroll_press_close_forward_correctly() -> None:
         await s.close()
     assert [c[0] for c in calls] == ["type", "scroll", "press_key", "close_session"]
     assert calls[0][1] == {"session_id": "s1", "stable_id": "textbox:e", "text": "hi"}
-    assert calls[1][1] == {"session_id": "s1", "stable_id": None, "direction": "down", "amount": 300}
+    assert calls[1][1] == {"session_id": "s1", "direction": "down", "amount": 300}
     assert calls[2][1] == {"session_id": "s1", "key": "Enter"}
 
 

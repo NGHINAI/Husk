@@ -15,6 +15,9 @@ export interface SiteGraphRow {
   /** v0.1+ fuzzy-resolve cache stats; always 0 in v0 */
   hit_count: number;
   miss_count: number;
+  /** M14: per-selector action outcome counts for reliability scoring */
+  success_count: number;
+  failure_count: number;
 }
 
 /** Criteria for `SiteGraphCache.query()`. All fields optional; intersection semantics. */

@@ -5,6 +5,7 @@ import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 import type { WaitForCondition, WaitForResult } from "../session/wait.js";
+import type { PaginateOpts } from "../session/paginate.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -42,6 +43,7 @@ export interface CreateSessionResult {
 /** Result of `goto`. */
 export interface GotoResult {
   ok: true;
+  snapshot?: import("../snapshot/types.js").Snapshot;
 }
 
 /** Result of `close_session`. Also returned when the id was unknown (idempotent). */
@@ -71,7 +73,7 @@ export const METHODS = {
   },
 
   async goto(
-    params: { session_id: string; url: string },
+    params: { session_id: string; url: string; include_snapshot?: boolean },
     ctx: MethodContext
   ): Promise<GotoResult> {
     if (typeof params.url !== "string") throw new InvalidUrlError(String(params.url));
@@ -82,16 +84,15 @@ export const METHODS = {
       throw new InvalidUrlError(params.url);
     }
     const session = ctx.sessions.get(params.session_id);
-    await session.goto(params.url);
-    return { ok: true };
+    return session.goto(params.url, { include_snapshot: params.include_snapshot });
   },
 
   async snapshot(
-    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" },
+    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" | "visible"; include_image?: boolean; full_page?: boolean },
     ctx: MethodContext
   ): Promise<Snapshot> {
     const session = ctx.sessions.get(params.session_id);
-    return await session.snapshot({ maxAgeMs: params.max_age_ms, mode: params.mode });
+    return await session.snapshot({ maxAgeMs: params.max_age_ms, mode: params.mode, include_image: params.include_image, full_page: params.full_page });
   },
 
   async snapshot_diff(
@@ -111,35 +112,50 @@ export const METHODS = {
   },
 
   async click(
-    params: { session_id: string; stable_id?: string; intent?: string },
+    params: { session_id: string; stable_id?: string; intent?: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.click({ stable_id: params.stable_id, intent: params.intent });
+    return await session.click({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot });
   },
 
   async type(
-    params: { session_id: string; stable_id?: string; intent?: string; text: string },
+    params: { session_id: string; stable_id?: string; intent?: string; text: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.type({ stable_id: params.stable_id, intent: params.intent }, params.text);
+    return await session.type({ stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot }, params.text);
   },
 
   async scroll(
-    params: { session_id: string; stable_id?: string | null; intent?: string; direction: "up" | "down" | "left" | "right" | "into_view"; amount: number },
+    params: {
+      session_id: string;
+      stable_id?: string | null;
+      intent?: string;
+      direction?: "up" | "down" | "left" | "right" | "into_view";
+      amount?: number;
+      include_snapshot?: boolean;
+      until?: WaitForCondition;
+      max_scrolls?: number;
+      scroll_amount_px?: number;
+    },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.scroll({ stable_id: params.stable_id, intent: params.intent }, params.direction, params.amount);
+    return await session.scroll(
+      { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
+      (params.direction ?? "down") as "up" | "down" | "left" | "right" | "into_view",
+      params.amount ?? 800,
+      { until: params.until, max_scrolls: params.max_scrolls, scroll_amount_px: params.scroll_amount_px, include_snapshot: params.include_snapshot },
+    );
   },
 
   async press_key(
-    params: { session_id: string; key: string },
+    params: { session_id: string; key: string; include_snapshot?: boolean },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
-    return await session.press_key(params.key);
+    return await session.press_key(params.key, { include_snapshot: params.include_snapshot });
   },
 
   async set_policy(
@@ -205,15 +221,23 @@ export const METHODS = {
   },
 
   async extract(
-    params: { session_id: string; css?: string; selectors?: Record<string, string> },
+    params: { session_id: string; css?: string; selectors?: Record<string, string>; paginate?: PaginateOpts },
     ctx: MethodContext
-  ): Promise<{ text?: string | null; result?: Record<string, string | null> }> {
+  ): Promise<{ text?: string | null; result?: Record<string, string | null>; pages?: unknown[]; total_pages?: number; stopped_reason?: string }> {
     const session = ctx.sessions.get(params.session_id);
     if (params.selectors) {
+      if (params.paginate) {
+        const paginateResult = await session.extract({ selectors: params.selectors, paginate: params.paginate });
+        return paginateResult as { pages: unknown[]; total_pages: number; stopped_reason: string };
+      }
       const result = await session.extract({ selectors: params.selectors });
       return { result: result as Record<string, string | null> };
     }
     if (params.css) {
+      if (params.paginate) {
+        const paginateResult = await session.extract({ css: params.css, paginate: params.paginate });
+        return paginateResult as { pages: unknown[]; total_pages: number; stopped_reason: string };
+      }
       const text = await session.extract({ css: params.css });
       return { text: text as string | null };
     }
@@ -230,6 +254,7 @@ export const METHODS = {
       username?: string;
       password?: string;
       totp_secret?: string;
+      include_snapshot?: boolean;
     },
     ctx: MethodContext
   ) {
@@ -241,6 +266,7 @@ export const METHODS = {
         username: params.username,
         password: params.password,
         totp_secret: params.totp_secret,
+        include_snapshot: params.include_snapshot,
       });
     }
 
@@ -254,6 +280,7 @@ export const METHODS = {
         username: cred.username,
         password: cred.password,
         totp_secret: cred.totp_secret,
+        include_snapshot: params.include_snapshot,
       });
     }
 
@@ -290,12 +317,13 @@ export const METHODS = {
       file_path?: string;
       content_base64?: string;
       filename?: string;
+      include_snapshot?: boolean;
     },
     ctx: MethodContext
   ) {
     const session = ctx.sessions.get(params.session_id);
     return session.upload(
-      { stable_id: params.stable_id, intent: params.intent },
+      { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
       { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
     );
   },

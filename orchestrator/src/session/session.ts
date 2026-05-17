@@ -4,11 +4,19 @@ import { waitForPageReady } from "./page-ready.js";
 import { transformAxTree } from "../snapshot/adapter.js";
 import { diffSnapshots } from "../snapshot/poller.js";
 import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/types.js";
+import { computeSignature, type AxLite } from "../snapshot/signature.js";
+import { extractMeta } from "../snapshot/meta.js";
+import { extractForms } from "../snapshot/forms.js";
+import { summarize } from "../snapshot/summary.js";
+import { NetworkBuffer } from "./network-buffer.js";
+import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
+import { HistoryBuffer } from "./history-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
 import type { SiteGraphCache } from "../cache/site-graph.js";
 import { Watchdog } from "../watchdog/watchdog.js";
 import { dispatchClick, dispatchType, dispatchScroll, dispatchPress, type ScrollDirection } from "./actions.js";
 import { runExtract, type ExtractQuery } from "./extract.js";
+import { runPaginate, type PaginateResult } from "./paginate.js";
 import { runWaitFor, type WaitForCondition, type WaitForResult } from "./wait.js";
 import { runUpload, type UploadResult } from "./upload.js";
 import type { RejectionEnvelope, Warning, PolicyDocument } from "../watchdog/types.js";
@@ -19,8 +27,12 @@ import { performLogin, type LoginInput, type LoginResult } from "../auth/login-f
 import { totpCode } from "../auth/totp.js";
 import type { EngineHandle } from "../engine/pool.js";
 import { runFind, type FindCandidate } from "./find.js";
+import { runScrollUntil, type ScrollUntilResult } from "./scroll-until.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { WatchEvent } from "../watch/events.js";
+import { filterVisible } from "../snapshot/visible.js";
+import { captureScreenshot } from "../snapshot/screenshot.js";
+import { deriveApiHints } from "../snapshot/api-hints.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -76,12 +88,32 @@ export type ActionResultWithIntent =
   | ActionResult
   | { ok: false; reason: "no_match" | "ambiguous_intent" | "missing_target"; candidates: FindCandidate[] };
 
+/** Any action result (including intent failures) optionally widened with post-action snapshot. */
+export type ActionResultWithSnapshot<T> = T & { snapshot?: Snapshot };
+
+/** Normalize CDP console.type / Log.level strings to our ConsoleLevel enum. */
+function normalizeConsoleLevel(t?: string): ConsoleLevel {
+  switch (t) {
+    case "error": case "assert": return "error";
+    case "warning": case "warn": return "warn";
+    case "info": return "info";
+    case "debug": case "trace": return "debug";
+    default: return "log";
+  }
+}
+
 export class Session {
   private lastSnapshotAt = 0;
-  private lastSnapshotMode: "full" | "terse" = "full";
+  private lastSnapshotMode: "full" | "terse" | "visible" = "full";
   /** networkIdleMs passed to waitForPageReady. Production default: 500.
    *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
   private networkIdleMs = 500;
+  /** Ring buffer of recent CDP Network events. Populated after Session.create(). */
+  private networkBuffer = new NetworkBuffer(100);
+  /** Ring buffer of recent console messages (Runtime + Log CDP events). */
+  private consoleBuffer = new ConsoleBuffer(50);
+  /** Ring buffer of recent session actions (click, type, etc). */
+  private historyBuffer = new HistoryBuffer(10);
 
   private constructor(
     private readonly engine: LightpandaProcess,
@@ -141,6 +173,8 @@ export class Session {
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Network.enable", {}, sessionId);
     await cdp.send("Accessibility.enable", {}, sessionId);
+    await cdp.send("Runtime.enable", {}, sessionId);
+    await cdp.send("Log.enable", {}, sessionId).catch(() => {});  // some engines don't have Log domain
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
     const inst = new Session(
@@ -152,15 +186,76 @@ export class Session {
       opts.watchBus ?? null,
       opts.watchSessionId ?? null
     );
+
+    // Wire CDP Network events into the ring buffer.
+    // CDP timestamps are fractional seconds — multiply by 1000 to get ms.
+    cdp.on("Network.requestWillBeSent", (params: unknown) => {
+      const p = params as { requestId?: string; request?: { url?: string; method?: string }; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onRequest(p.requestId, {
+        url: p.request?.url ?? "",
+        method: p.request?.method ?? "GET",
+        startedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+    cdp.on("Network.responseReceived", (params: unknown) => {
+      const p = params as { requestId?: string; response?: { status?: number; mimeType?: string }; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onResponse(p.requestId, {
+        status: p.response?.status ?? 0,
+        mimeType: p.response?.mimeType ?? "",
+        completedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+    cdp.on("Network.loadingFailed", (params: unknown) => {
+      const p = params as { requestId?: string; timestamp?: number };
+      if (!p.requestId) return;
+      inst.networkBuffer.onFailed(p.requestId, {
+        completedAt: (p.timestamp ?? 0) * 1000,
+      });
+    });
+
+    // Wire CDP Runtime.consoleAPICalled events into the console buffer.
+    // CDP timestamps are fractional seconds — multiply by 1000 to get ms.
+    cdp.on("Runtime.consoleAPICalled", (params: unknown) => {
+      const p = params as { type?: string; args?: Array<{ value?: unknown; description?: string }>; timestamp?: number };
+      const text = (p.args ?? [])
+        .map((a) => (typeof a.value === "string" ? a.value : a.description ?? JSON.stringify(a.value ?? null)))
+        .join(" ");
+      const level = normalizeConsoleLevel(p.type);
+      inst.consoleBuffer.add({ level, text, ts: (p.timestamp ?? 0) * 1000 });
+    });
+
+    // Wire CDP Log.entryAdded events into the console buffer.
+    // Log.entryAdded timestamps are already in ms per CDP spec.
+    cdp.on("Log.entryAdded", (params: unknown) => {
+      const p = params as { entry?: { level?: string; text?: string; timestamp?: number } };
+      const e = p.entry;
+      if (!e) return;
+      inst.consoleBuffer.add({
+        level: normalizeConsoleLevel(e.level),
+        text: e.text ?? "",
+        ts: e.timestamp ?? 0,
+      });
+    });
+
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
     }
     return inst;
   }
 
-  async goto(url: string): Promise<void> {
+  async goto(url: string, opts: { include_snapshot?: boolean } = {}): Promise<{ ok: true; snapshot?: Snapshot }> {
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
+    // Track goto in history (no target_name for navigation)
+    this.historyBuffer.add({
+      verb: "goto",
+      target_name: null,
+      ok: true,
+      ts: Date.now(),
+      url_after: url,
+    });
     // Emit navigation event.
     this.emitWatch({ kind: "navigation", ts: Date.now(), url });
     // Wait for the page to reach a network-idle state instead of a fixed delay.
@@ -176,13 +271,20 @@ export class Session {
     } catch {
       // best-effort
     }
+    // Post-goto snapshot: include_snapshot defaults to true for goto.
+    // The eager snapshot above already cached the result, so this is a free cache hit.
+    const doSnap = opts.include_snapshot !== false;
+    return this.withSnapshot({ ok: true as const }, doSnap);
   }
 
-  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" } = {}): Promise<Snapshot> {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" | "visible"; include_image?: boolean; full_page?: boolean } = {}): Promise<Snapshot> {
     const maxAge = opts.maxAgeMs ?? 500;
     const mode = opts.mode ?? "full";
+    // When include_image is true, bypass the cache (always get fresh)
+    const bypassCacheForImage = opts.include_image === true;
     const fresh =
       !opts.force &&
+      !bypassCacheForImage &&
       this.lastSnapshot &&
       Date.now() - this.lastSnapshotAt < maxAge &&
       this.lastSnapshotMode === mode;
@@ -192,7 +294,83 @@ export class Session {
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
-    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode });
+    // Visible mode: build the full AX tree first, then filter via viewport bbox.
+    const axMode = mode === "visible" ? "full" : mode;
+    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode: axMode });
+
+    // M14 T6: Visible-only post-processing — filter to viewport-intersecting nodes.
+    if (mode === "visible") {
+      try {
+        const metrics = (await this.cdp.send(
+          "Page.getLayoutMetrics", {}, this.sessionId
+        )) as { layoutViewport?: { clientWidth?: number; clientHeight?: number }; cssLayoutViewport?: { clientWidth?: number; clientHeight?: number } } | null;
+        // Page.getLayoutMetrics shape varies slightly across engines.
+        const vw =
+          metrics?.layoutViewport?.clientWidth ??
+          metrics?.cssLayoutViewport?.clientWidth ??
+          1280;
+        const vh =
+          metrics?.layoutViewport?.clientHeight ??
+          metrics?.cssLayoutViewport?.clientHeight ??
+          800;
+        const cdpProxy = {
+          send: (method: string, params: unknown) =>
+            this.cdp.send(method, params as Record<string, unknown>, this.sessionId),
+        };
+        snap.root = (await filterVisible(cdpProxy, snap.root as any, { width: vw, height: vh })) as unknown as typeof snap.root;
+        // Recount nodes after filtering.
+        let cnt = 0;
+        const recount = (n: typeof snap.root) => {
+          cnt += 1;
+          for (const c of n.c ?? []) recount(c);
+        };
+        recount(snap.root);
+        snap.count = cnt;
+      } catch {
+        // Graceful degrade: Page.getLayoutMetrics or DOM.getBoxModel unavailable.
+        // Return the full (unfiltered) tree rather than throwing.
+      }
+    }
+
+    // M14 T2 + T10: Attach network ring buffer and derived API hints to snapshot.
+    const networkRecent = this.networkBuffer.recent();
+    snap.network = {
+      recent: networkRecent,
+      likely_api_endpoints: deriveApiHints(networkRecent),
+    };
+
+    // M14 T3: Attach console buffer to snapshot.
+    snap.console = this.consoleBuffer.recent();
+
+    // M14 T1+T2: Compute state signature with actual network URLs.
+    snap.signature = computeSignature({
+      root: snap.root as unknown as AxLite,
+      url: snap.url,
+      networkUrls: this.networkBuffer.urls(),
+    });
+
+    // M14 T4: Extract page metadata (title, canonical, og, jsonld).
+    snap.meta = await extractMeta(this.cdp as any, this.sessionId);
+
+    // M14 T5: Extract form definitions (fields, labels, submit_text).
+    snap.forms = await extractForms(this.cdp as any, this.sessionId);
+
+    // M14 T7: Compute rule-based one-line page summary.
+    snap.summary = summarize({
+      url: snap.url,
+      meta: snap.meta ?? { title: null, canonical: null, og: {}, jsonld: [] },
+      forms: snap.forms ?? [],
+      nodes_count: countAxNodes(snap.root),
+    });
+
+    // M14 T9: Attach session history buffer to snapshot.
+    snap.session_history = this.historyBuffer.recent();
+
+    // M14 T8: Optionally attach base64 PNG screenshot.
+    if (opts.include_image) {
+      snap.image_b64 = (await captureScreenshot(this.cdp as any, { fullPage: opts.full_page })) ?? undefined;
+    }
+
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();
     this.lastSnapshotMode = mode;
@@ -234,7 +412,15 @@ export class Session {
 
     const snap = await this.snapshot();
     const flatNodes = flattenSnapshot(snap.root);
-    const r = await runFind({ snapshot: { nodes: flatNodes }, cache: null }, { intent: t.intent });
+    const domain = (() => {
+      try { return new URL(this.currentUrl).hostname; } catch { return undefined; }
+    })();
+    const r = await runFind({
+      snapshot: { nodes: flatNodes },
+      cache: null,
+      siteGraphCache: this.siteGraph ?? undefined,
+      domain,
+    }, { intent: t.intent });
     // Emit find event — both on success and failure (read-only, before action attempts).
     this.emitWatch({ kind: "find", ts: Date.now(), intent: t.intent, candidates: r.candidates });
     if (!r.ok) return { ok: false, reason: "no_match", candidates: r.candidates };
@@ -247,6 +433,21 @@ export class Session {
     return { ok: true, stable_id: r.candidates[0].stable_id };
   }
 
+  // Extracts the accessible name of a node by stable_id from a snapshot.
+  private getTargetName(snapshot: Snapshot, stable_id: string | null): string | null {
+    if (!stable_id) return null;
+    const findNode = (node: SnapshotNode): SnapshotNode | null => {
+      if (node.i === stable_id) return node;
+      for (const child of node.c ?? []) {
+        const found = findNode(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    const node = findNode(snapshot.root);
+    return node?.n ?? null;
+  }
+
   // ---------------------------------------------------------------------------
   // Internal perform* methods — take a resolved stable_id, run watchdog, dispatch.
   // ---------------------------------------------------------------------------
@@ -256,11 +457,26 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "click", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "click",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      // Record reliability outcome.
+      if (this.siteGraph) {
+        try {
+          const domain = new URL(this.currentUrl).hostname;
+          this.siteGraph.recordFailure(domain, stable_id);
+        } catch { /* ignore */ }
+      }
+      return envelope;
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: "element_not_found", candidates: [] });
-      return {
+      const envelope: RejectionEnvelope = {
         ok: false,
         reason: "element_not_found",
         verb: "click",
@@ -268,6 +484,21 @@ export class Session {
         candidates: [],
         snapshot_at_attempt: before,
       };
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "click",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      // Record reliability outcome.
+      if (this.siteGraph) {
+        try {
+          const domain = new URL(this.currentUrl).hostname;
+          this.siteGraph.recordFailure(domain, stable_id);
+        } catch { /* ignore */ }
+      }
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
@@ -281,6 +512,21 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "click", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "click",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    // Record reliability outcome in site-graph cache.
+    if (this.siteGraph) {
+      try {
+        const domain = new URL(this.currentUrl).hostname;
+        this.siteGraph.recordSuccess(domain, stable_id);
+      } catch { /* ignore parse errors */ }
+    }
     return result;
   }
 
@@ -289,11 +535,22 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "type", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "type",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
+      return envelope;
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: "element_not_found", candidates: [] });
-      return {
+      const envelope: RejectionEnvelope = {
         ok: false,
         reason: "element_not_found",
         verb: "type",
@@ -301,6 +558,17 @@ export class Session {
         candidates: [],
         snapshot_at_attempt: before,
       };
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "type",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
@@ -314,6 +582,17 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "type", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "type",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    if (this.siteGraph) {
+      try { this.siteGraph.recordSuccess(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+    }
     return result;
   }
 
@@ -322,7 +601,18 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "scroll", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "scroll", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "scroll",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      if (this.siteGraph && stable_id) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
+      return envelope;
     }
     const urlBefore = this.currentUrl;
     await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
@@ -336,6 +626,17 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "scroll", stable_id, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "scroll",
+      target_name: this.getTargetName(before, stable_id),
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    if (this.siteGraph && stable_id) {
+      try { this.siteGraph.recordSuccess(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+    }
     return result;
   }
 
@@ -347,11 +648,31 @@ export class Session {
     const pre = this.watchdog.evaluatePre(before, "upload", stable_id);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "upload",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       // TODO(M14): mirror click/type and return the full RejectionEnvelope (candidates + snapshot_at_attempt)
       return { ok: false, reason: pre.envelope.reason };
     }
     if (pre.backendNodeId == null) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "upload", reason: "element_not_found", candidates: [] });
+      // Track rejection in history
+      this.historyBuffer.add({
+        verb: "upload",
+        target_name: this.getTargetName(before, stable_id),
+        ok: false,
+        ts: Date.now(),
+      });
+      if (this.siteGraph) {
+        try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+      }
       return { ok: false, reason: "element_not_found" };
     }
     const result = await runUpload({
@@ -362,7 +683,45 @@ export class Session {
       resolveBackendNodeId: async (_sid: string) => pre.backendNodeId!,
     }, { stable_id, ...fileSpec });
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "upload", stable_id, ok: result.ok });
+    // Track result in history
+    this.historyBuffer.add({
+      verb: "upload",
+      target_name: this.getTargetName(before, stable_id),
+      ok: result.ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    // Record reliability outcome.
+    if (this.siteGraph) {
+      try {
+        const domain = new URL(this.currentUrl).hostname;
+        if (result.ok) this.siteGraph.recordSuccess(domain, stable_id);
+        else this.siteGraph.recordFailure(domain, stable_id);
+      } catch { /* ignore */ }
+    }
     return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helper — attach post-action snapshot to any result.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Attach a post-action snapshot to `result` unless `include_snapshot` is false.
+   * Uses force:false (M9 cache) — typically free since the action already called
+   * snapshot({ force: true }) and cached the result. Graceful degrade on error.
+   */
+  private async withSnapshot<T extends object>(
+    result: T,
+    include: boolean
+  ): Promise<T & { snapshot?: Snapshot }> {
+    if (!include) return result;
+    try {
+      const snap = await this.snapshot({ force: false });
+      return { ...result, snapshot: snap };
+    } catch {
+      return result;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -376,63 +735,131 @@ export class Session {
    *
    * Also accepts a bare `string` for backwards-compatible call sites
    * (e.g. internal login-flow). All new call sites should pass a Target object.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot
+   * (saves tokens when you don't need post-state).
    */
-  async click(target: Target | string): Promise<ActionResultWithIntent> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  async click(target: (Target & { include_snapshot?: boolean }) | string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     // resolved.stable_id is string | null; click always requires a real id.
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performClick(resolved.stable_id);
+    const result = await this.performClick(resolved.stable_id);
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
    * Type into a text field. Pass `{ stable_id }` or `{ intent }` as the target.
    *
    * Also accepts a bare `string` stable_id for backwards compatibility.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
-  async type(target: Target | string, text: string): Promise<ActionResultWithIntent> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  async type(target: (Target & { include_snapshot?: boolean }) | string, text: string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performType(resolved.stable_id, text);
+    const result = await this.performType(resolved.stable_id, text);
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
    * Scroll the page or an element. Pass `{ stable_id }` (may be null for
    * window scroll), `{ intent }`, or a bare `string | null`.
+   *
+   * Pass `until` to scroll until a condition is met (scroll-until mode).
+   * In this mode `direction` and `amount` default to "down" / 800px and
+   * the method loops internally, returning {ok, scrolls, condition_met?, snapshot}.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
-  async scroll(target: Target | string | null, direction: ScrollDirection, amount: number): Promise<ActionResultWithIntent> {
-    let t: Target;
+  async scroll(
+    target: (Target & { include_snapshot?: boolean }) | string | null,
+    direction: ScrollDirection,
+    amount: number,
+    opts?: { until?: WaitForCondition; max_scrolls?: number; scroll_amount_px?: number; include_snapshot?: boolean },
+  ): Promise<ActionResultWithSnapshot<ActionResultWithIntent> | ActionResultWithSnapshot<ScrollUntilResult>>;
+  async scroll(
+    target: (Target & { include_snapshot?: boolean }) | string | null,
+    direction?: ScrollDirection,
+    amount?: number,
+    opts?: { until?: WaitForCondition; max_scrolls?: number; scroll_amount_px?: number; include_snapshot?: boolean },
+  ): Promise<ActionResultWithSnapshot<ActionResultWithIntent> | ActionResultWithSnapshot<ScrollUntilResult>> {
+    // Scroll-until mode: delegate to runScrollUntil.
+    if (opts?.until) {
+      const doSnap = opts.include_snapshot !== false;
+      const r = await runScrollUntil(
+        {
+          snapshot: async (o) => {
+            const snap = await this.snapshot(o);
+            return { url: snap.url, nodes: flattenSnapshot(snap.root) };
+          },
+          runtimeEval: async (expr: string) => {
+            const res = await this.cdp.send(
+              "Runtime.evaluate",
+              { expression: expr, returnByValue: true },
+              this.sessionId,
+            ) as { result?: { value?: unknown } };
+            return res.result?.value;
+          },
+          scroll: (_t, _d, a) => this.performScroll(null, "down", a),
+        },
+        { until: opts.until, max_scrolls: opts.max_scrolls, scroll_amount_px: opts.scroll_amount_px ?? amount },
+      );
+      return this.withSnapshot(r, doSnap);
+    }
+
+    // Normal pixel-based scroll path (unchanged).
+    let raw: (Target & { include_snapshot?: boolean }) | null;
     if (target === null) {
-      t = { stable_id: null };
+      raw = { stable_id: null };
     } else if (typeof target === "string") {
-      t = { stable_id: target };
+      raw = { stable_id: target };
     } else {
-      t = target;
+      raw = target;
     }
-    const resolved = await this.resolveTarget(t);
+    const { include_snapshot, ...tTarget } = (raw ?? { stable_id: null }) as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
-    return this.performScroll(resolved.stable_id, direction, amount);
+    const result = await this.performScroll(resolved.stable_id, direction ?? "down", amount ?? 800);
+    return this.withSnapshot(result, doSnap);
   }
 
-  async press_key(key: string): Promise<ActionResult> {
+  /**
+   * Press a key. Pass `include_snapshot: false` to opt out of the post-action snapshot.
+   */
+  async press_key(key: string, opts: { include_snapshot?: boolean } = {}): Promise<ActionResultWithSnapshot<ActionResult>> {
+    const doSnap = opts.include_snapshot !== false;
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "press_key", null);
     if (!pre.ok) {
       this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "press_key", reason: pre.envelope.reason, candidates: pre.envelope.candidates });
-      return pre.envelope;
+      const envelope = pre.envelope;
+      // Track rejection in history (no target for keyboard action)
+      this.historyBuffer.add({
+        verb: "press_key",
+        target_name: null,
+        ok: false,
+        ts: Date.now(),
+      });
+      return this.withSnapshot(envelope, doSnap);
     }
     const urlBefore = this.currentUrl;
     await dispatchPress(this.cdp, this.sessionId, key);
@@ -446,7 +873,15 @@ export class Session {
       diff: diffSnapshots(before, after),
     };
     this.emitWatch({ kind: "action", ts: Date.now(), verb: "press_key", stable_id: null, ok: true, diff: result.diff ? { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length } : undefined });
-    return result;
+    // Track success in history
+    this.historyBuffer.add({
+      verb: "press_key",
+      target_name: null,
+      ok: true,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
@@ -456,23 +891,29 @@ export class Session {
    * `{ content_base64, filename }` (base64-encoded bytes with a suggested name).
    * Routes through the M5 watchdog — rejects if the element is not found or
    * is disabled.
+   *
+   * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
   async upload(
-    target: Target | string,
+    target: (Target & { include_snapshot?: boolean }) | string,
     fileSpec: { file_path?: string; content_base64?: string; filename?: string },
-  ): Promise<UploadResult & { candidates?: FindCandidate[] }> {
-    const t: Target = typeof target === "string" ? { stable_id: target } : target;
-    const resolved = await this.resolveTarget(t);
+  ): Promise<ActionResultWithSnapshot<UploadResult & { candidates?: FindCandidate[] }>> {
+    const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
+    const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
+    const doSnap = include_snapshot !== false;
+    const resolved = await this.resolveTarget(tTarget);
     if (!resolved.ok) {
-      return { ok: false, reason: resolved.reason, candidates: resolved.candidates };
+      return this.withSnapshot({ ok: false as const, reason: resolved.reason, candidates: resolved.candidates }, doSnap);
     }
     if (resolved.stable_id == null) {
-      return { ok: false, reason: "missing_target", candidates: [] };
+      return this.withSnapshot({ ok: false as const, reason: "missing_target" as const, candidates: [] }, doSnap);
     }
-    return this.performUpload(resolved.stable_id, fileSpec);
+    const result = await this.performUpload(resolved.stable_id, fileSpec);
+    return this.withSnapshot(result, doSnap);
   }
 
-  async login(input: LoginInput & { totp_secret?: string }): Promise<LoginResult> {
+  async login(input: LoginInput & { totp_secret?: string; include_snapshot?: boolean }): Promise<ActionResultWithSnapshot<LoginResult>> {
+    const doSnap = input.include_snapshot !== false;
     const code = input.totp_code ?? (input.totp_secret ? totpCode(input.totp_secret) : undefined);
     const result = await performLogin(
       {
@@ -490,10 +931,29 @@ export class Session {
     // JavaScript-based form fill when that happens.
     if (!result.ok && result.reason === "login_form_not_found") {
       const jsResult = await this.jsFormLogin(input.username, input.password);
-      if (jsResult !== null) return jsResult;
+      if (jsResult !== null) {
+        // Track login success in history
+        this.historyBuffer.add({
+          verb: "login",
+          target_name: null,
+          ok: true,
+          ts: Date.now(),
+          url_after: this.currentUrl,
+        });
+        return this.withSnapshot(jsResult, doSnap);
+      }
     }
 
-    return result;
+    // Track login result in history (after all fallbacks)
+    this.historyBuffer.add({
+      verb: "login",
+      target_name: null,
+      ok: result.ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+
+    return this.withSnapshot(result, doSnap);
   }
 
   /**
@@ -586,8 +1046,48 @@ export class Session {
     }
   }
 
-  async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null>> {
-    return await runExtract(this.cdp, this.sessionId, query);
+  async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null> | PaginateResult> {
+    // Paginate mode: when paginate option is present, run the click-next loop.
+    if (query.paginate) {
+      const paginateOpts = query.paginate;
+      // Build a session-like object for runPaginate using this session's methods.
+      const paginateSession = {
+        extractOnce: async () => {
+          if ("selectors" in query && query.selectors) {
+            return runExtract(this.cdp, this.sessionId, { selectors: query.selectors });
+          }
+          if ("css" in query && query.css) {
+            return runExtract(this.cdp, this.sessionId, { css: query.css });
+          }
+          throw new Error("extract with paginate requires either css or selectors");
+        },
+        click: (target: { stable_id?: string; intent?: string }) =>
+          this.click({ ...target, include_snapshot: false }),
+        waitFor: (c: WaitForCondition) => this.waitFor(c),
+      };
+      const result = await runPaginate(paginateSession, paginateOpts);
+      this.historyBuffer.add({
+        verb: "extract",
+        target_name: null,
+        ok: true,
+        ts: Date.now(),
+        url_after: this.currentUrl,
+      });
+      return result;
+    }
+
+    // Single-page extract (existing behavior).
+    const result = await runExtract(this.cdp, this.sessionId, query);
+    // Track extract in history (success is determined by result not being null)
+    const ok = result !== null;
+    this.historyBuffer.add({
+      verb: "extract",
+      target_name: null,
+      ok,
+      ts: Date.now(),
+      url_after: this.currentUrl,
+    });
+    return result;
   }
 
   async waitFor(c: WaitForCondition): Promise<WaitForResult> {
@@ -641,6 +1141,20 @@ export class Session {
 
 function waitForMutationWindow(): Promise<void> {
   return new Promise((r) => setTimeout(r, 500));
+}
+
+/**
+ * Count all AX nodes in the snapshot tree (root included).
+ * Used by summarize() to include a node-count in generic fallback summaries.
+ */
+function countAxNodes(root: SnapshotNode): number {
+  let n = 0;
+  const count = (node: SnapshotNode) => {
+    n++;
+    if (node.c) for (const child of node.c) count(child);
+  };
+  count(root);
+  return n;
 }
 
 /**
