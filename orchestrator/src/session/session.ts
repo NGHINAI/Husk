@@ -7,6 +7,7 @@ import type { AXNode, Snapshot, SnapshotDiff, SnapshotNode } from "../snapshot/t
 import { computeSignature, type AxLite } from "../snapshot/signature.js";
 import { extractMeta } from "../snapshot/meta.js";
 import { extractForms } from "../snapshot/forms.js";
+import { summarize } from "../snapshot/summary.js";
 import { NetworkBuffer } from "./network-buffer.js";
 import { ConsoleBuffer, type ConsoleLevel } from "./console-buffer.js";
 import { locateLightpanda } from "../engine/binary.js";
@@ -324,6 +325,14 @@ export class Session {
 
     // M14 T5: Extract form definitions (fields, labels, submit_text).
     snap.forms = await extractForms(this.cdp as any, this.sessionId);
+
+    // M14 T7: Compute rule-based one-line page summary.
+    snap.summary = summarize({
+      url: snap.url,
+      meta: snap.meta ?? { title: null, canonical: null, og: {}, jsonld: [] },
+      forms: snap.forms ?? [],
+      nodes_count: countAxNodes(snap.root),
+    });
 
     this.lastSnapshot = snap;
     this.lastSnapshotAt = Date.now();
@@ -773,6 +782,20 @@ export class Session {
 
 function waitForMutationWindow(): Promise<void> {
   return new Promise((r) => setTimeout(r, 500));
+}
+
+/**
+ * Count all AX nodes in the snapshot tree (root included).
+ * Used by summarize() to include a node-count in generic fallback summaries.
+ */
+function countAxNodes(root: SnapshotNode): number {
+  let n = 0;
+  const count = (node: SnapshotNode) => {
+    n++;
+    if (node.c) for (const child of node.c) count(child);
+  };
+  count(root);
+  return n;
 }
 
 /**
