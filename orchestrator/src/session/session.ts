@@ -26,6 +26,7 @@ import type { EngineHandle } from "../engine/pool.js";
 import { runFind, type FindCandidate } from "./find.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { WatchEvent } from "../watch/events.js";
+import { filterVisible } from "../snapshot/visible.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -94,7 +95,7 @@ function normalizeConsoleLevel(t?: string): ConsoleLevel {
 
 export class Session {
   private lastSnapshotAt = 0;
-  private lastSnapshotMode: "full" | "terse" = "full";
+  private lastSnapshotMode: "full" | "terse" | "visible" = "full";
   /** networkIdleMs passed to waitForPageReady. Production default: 500.
    *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
   private networkIdleMs = 500;
@@ -253,7 +254,7 @@ export class Session {
     }
   }
 
-  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" } = {}): Promise<Snapshot> {
+  async snapshot(opts: { maxAgeMs?: number; force?: boolean; mode?: "full" | "terse" | "visible" } = {}): Promise<Snapshot> {
     const maxAge = opts.maxAgeMs ?? 500;
     const mode = opts.mode ?? "full";
     const fresh =
@@ -267,7 +268,43 @@ export class Session {
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
-    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode });
+    // Visible mode: build the full AX tree first, then filter via viewport bbox.
+    const axMode = mode === "visible" ? "full" : mode;
+    const snap = transformAxTree(tree.nodes, root.nodeId, this.currentUrl, { mode: axMode });
+
+    // M14 T6: Visible-only post-processing — filter to viewport-intersecting nodes.
+    if (mode === "visible") {
+      try {
+        const metrics = (await this.cdp.send(
+          "Page.getLayoutMetrics", {}, this.sessionId
+        )) as { layoutViewport?: { clientWidth?: number; clientHeight?: number }; cssLayoutViewport?: { clientWidth?: number; clientHeight?: number } } | null;
+        // Page.getLayoutMetrics shape varies slightly across engines.
+        const vw =
+          metrics?.layoutViewport?.clientWidth ??
+          metrics?.cssLayoutViewport?.clientWidth ??
+          1280;
+        const vh =
+          metrics?.layoutViewport?.clientHeight ??
+          metrics?.cssLayoutViewport?.clientHeight ??
+          800;
+        const cdpProxy = {
+          send: (method: string, params: unknown) =>
+            this.cdp.send(method, params as Record<string, unknown>, this.sessionId),
+        };
+        snap.root = (await filterVisible(cdpProxy, snap.root as any, { width: vw, height: vh })) as unknown as typeof snap.root;
+        // Recount nodes after filtering.
+        let cnt = 0;
+        const recount = (n: typeof snap.root) => {
+          cnt += 1;
+          for (const c of n.c ?? []) recount(c);
+        };
+        recount(snap.root);
+        snap.count = cnt;
+      } catch {
+        // Graceful degrade: Page.getLayoutMetrics or DOM.getBoxModel unavailable.
+        // Return the full (unfiltered) tree rather than throwing.
+      }
+    }
 
     // M14 T2: Attach network ring buffer to snapshot.
     snap.network = { recent: this.networkBuffer.recent() };

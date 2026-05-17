@@ -35,12 +35,17 @@ export const TOOL_SURFACE: ToolSpec[] = [
   },
   {
     name: "husk_snapshot",
-    description: "Husk — Return a semantic-tree snapshot of the current page. CACHED: if a snapshot was captured within the last 500ms, returns it from cache. Pass `max_age_ms: 0` to force a fresh capture. Each husk_goto auto-captures the snapshot so the first call after navigation is almost always a cache hit.",
+    description: "husk_snapshot — Read the current page state.\n\nWHEN TO USE: Whenever you need fresh context — but note that click/type/scroll already return the post-action snapshot, so you usually don't need a separate call.\n\nWHAT YOU GET: {root, url, mode, signature, meta, forms, network, console, summary, session_history, image_b64?}. The snapshot is your one-stop context dump.\n\nModes: \"full\" (default; complete AX tree) | \"terse\" (drops nav/banner/footer subtrees; faster) | \"visible\" (only nodes whose bbox intersects the viewport; smallest payload, best for scrollable feeds).\n\nCACHED: if a snapshot was captured within the last 500ms, returns it from cache. Pass `max_age_ms: 0` to force a fresh capture. Each husk_goto auto-captures the snapshot so the first call after navigation is almost always a cache hit.\n\nDO NOT: Call husk_snapshot after a click/type/scroll — the action result already includes a `snapshot` field with the post-action state.\n\nPass `include_image: true` to attach a base64 PNG. Pass `max_age_ms` (default 500ms) to control cache freshness.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string" },
         max_age_ms: { type: "number", description: "Cache TTL in milliseconds. Default 500. Pass 0 to force." },
+        mode: {
+          type: "string",
+          enum: ["full", "terse", "visible"],
+          description: "Snapshot mode: \"full\" (default; complete AX tree), \"terse\" (drops nav/banner/footer subtrees), or \"visible\" (only nodes whose bbox intersects the viewport — smallest payload, best for long scrollable pages).",
+        },
       },
       required: ["session_id"],
     },

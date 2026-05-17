@@ -87,7 +87,7 @@ export const METHODS = {
   },
 
   async snapshot(
-    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" },
+    params: { session_id: string; max_age_ms?: number; mode?: "full" | "terse" | "visible" },
     ctx: MethodContext
   ): Promise<Snapshot> {
     const session = ctx.sessions.get(params.session_id);

@@ -23,7 +23,13 @@ import { SelectorResolver } from "./resolver.js";
  *   - `v` (visible) — always set for now; visibility comes from CDP DOM in v0.1
  */
 export interface TransformAxOptions {
-  mode?: "full" | "terse";
+  /**
+   * "full"    — emit the complete AX tree (default).
+   * "terse"   — drop nav/banner/footer subtrees.
+   * "visible" — not handled here; Session.snapshot post-processes a "full"
+   *             tree through filterVisible() after transformAxTree returns.
+   */
+  mode?: "full" | "terse" | "visible";
 }
 
 export function transformAxTree(
