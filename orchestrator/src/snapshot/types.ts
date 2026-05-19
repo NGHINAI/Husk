@@ -115,6 +115,11 @@ export interface Snapshot {
 
   /** T8: Optional page image (base64 PNG, only when include_image=true). */
   image_b64?: string;
+
+  /** M15 T1: Other session ids in the same tab group (sharing cookie profile).
+   *  Always present as an array (empty for solo sessions). Agents can reliably
+   *  check `sibling_sessions.length` without guarding for undefined. */
+  sibling_sessions?: string[];
 }
 
 // ----- Diff types for mutation poller (Task 7) -----

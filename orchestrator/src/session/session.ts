@@ -57,6 +57,13 @@ export interface SessionOptions {
   watchBus?: WatchBus;
   /** The session id to use when emitting to the watch bus. Set by SessionManager. */
   watchSessionId?: string;
+  /**
+   * Callback that returns the sibling session ids (other tabs in the same tab
+   * group). Injected by SessionManager so snapshot() can include sibling_sessions
+   * without a circular reference to the manager. Absent for sessions created
+   * outside a manager (e.g. fromInjected in tests).
+   */
+  getSiblings?: () => string[];
 }
 
 /**
@@ -127,7 +134,8 @@ export class Session {
     private profile: string | null = null,
     private readonly engineHandle: EngineHandle | null = null,
     private readonly watchBus: WatchBus | null = null,
-    private readonly watchId: string | null = null
+    private readonly watchId: string | null = null,
+    private readonly getSiblings: (() => string[]) | null = null
   ) {}
 
   /** Emit an event to the watch bus if one is wired. No-op otherwise. */
@@ -184,7 +192,8 @@ export class Session {
       opts.profile ?? null,
       engineHandle,
       opts.watchBus ?? null,
-      opts.watchSessionId ?? null
+      opts.watchSessionId ?? null,
+      opts.getSiblings ?? null
     );
 
     // Wire CDP Network events into the ring buffer.
@@ -365,6 +374,9 @@ export class Session {
 
     // M14 T9: Attach session history buffer to snapshot.
     snap.session_history = this.historyBuffer.recent();
+
+    // M15 T1: Attach sibling session ids (tab group). Always present (empty for solo sessions).
+    snap.sibling_sessions = this.getSiblings ? this.getSiblings() : [];
 
     // M14 T8: Optionally attach base64 PNG screenshot.
     if (opts.include_image) {

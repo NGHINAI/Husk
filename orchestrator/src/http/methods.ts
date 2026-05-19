@@ -61,10 +61,13 @@ export const METHODS = {
   },
 
   async create_session(
-    params: { profile?: string } | undefined,
+    params: { profile?: string; parent_session_id?: string } | undefined,
     ctx: MethodContext
   ): Promise<CreateSessionResult> {
-    const session_id = await ctx.sessions.create({ profile: params?.profile });
+    const session_id = await ctx.sessions.create({
+      profile: params?.profile,
+      parent_session_id: params?.parent_session_id,
+    });
     const watch_url =
       ctx.host === "127.0.0.1" && ctx.portRef != null
         ? `http://127.0.0.1:${ctx.portRef.value}/watch?s=${encodeURIComponent(session_id)}`

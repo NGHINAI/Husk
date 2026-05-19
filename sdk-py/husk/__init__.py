@@ -50,10 +50,17 @@ class Husk:
         self.vault = VaultApi(self._client)
         self.credentials = CredentialsApi(self._client)
 
-    async def create_session(self, *, profile: Optional[str] = None) -> Session:
+    async def create_session(
+        self,
+        *,
+        profile: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+    ) -> Session:
         params: dict[str, Any] = {}
         if profile is not None:
             params["profile"] = profile
+        if parent_session_id is not None:
+            params["parent_session_id"] = parent_session_id
         r = await self._client.call("create_session", params)
         session = Session(self._client, r["session_id"])
         session.watch_url = r.get("watch_url")

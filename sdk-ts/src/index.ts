@@ -98,8 +98,10 @@ export class Husk {
     this.credentials = new CredentialsApi(this.client);
   }
 
-  async createSession(options: { profile?: string } = {}): Promise<Session & { watchUrl: string | null }> {
-    const params = options.profile !== undefined ? { profile: options.profile } : {};
+  async createSession(options: { profile?: string; parent_session_id?: string } = {}): Promise<Session & { watchUrl: string | null }> {
+    const params: Record<string, string> = {};
+    if (options.profile !== undefined) params["profile"] = options.profile;
+    if (options.parent_session_id !== undefined) params["parent_session_id"] = options.parent_session_id;
     const { session_id, watch_url } = await this.client.call<CreateSessionResult>("create_session", params);
     const session = new Session(this.client, session_id) as Session & { watchUrl: string | null };
     session.watchUrl = watch_url ?? null;

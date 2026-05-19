@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Session } from "./session.js";
+import { TabGroup } from "./tab-group.js";
 import type { WatchBus } from "../watch/sse.js";
 
 /**
@@ -20,7 +21,7 @@ export class SessionNotFoundError extends Error {
  * production this is `Session.create.bind(Session, opts)`. In tests we
  * pass a function returning a fake.
  */
-export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; watchSessionId?: string }) => Promise<Session>;
+export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; watchSessionId?: string; getSiblings?: () => string[] }) => Promise<Session>;
 
 /**
  * Owns the lifecycle of all live sessions. Each session has a unique id
@@ -29,19 +30,64 @@ export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; wa
  */
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
+  private readonly tabGroup = new TabGroup();
+
   constructor(
     private readonly factory: SessionFactory,
     /** Optional watch event bus. When present, each new session gets wired to it. */
     private readonly watchBus?: WatchBus
   ) {}
 
-  async create(opts: { profile?: string } = {}): Promise<string> {
+  async create(opts: { profile?: string; parent_session_id?: string } = {}): Promise<string> {
+    const { parent_session_id, profile: explicitProfile, ...rest } = opts;
+
+    // Validate parent exists if specified
+    if (parent_session_id !== undefined && !this.sessions.has(parent_session_id)) {
+      throw new Error(`unknown parent session: ${parent_session_id}`);
+    }
+
+    // Inherit the parent's profile (cookie sharing only works when profile matches)
+    let profile = explicitProfile;
+    if (parent_session_id !== undefined && profile === undefined) {
+      const parentSession = this.sessions.get(parent_session_id)!;
+      // Real Session exposes getProfile(); stubs may not — fall back gracefully
+      if (typeof (parentSession as unknown as { getProfile?: () => string | null }).getProfile === "function") {
+        profile = (parentSession as unknown as { getProfile: () => string | null }).getProfile() ?? undefined;
+      }
+    }
+
     const id = randomUUID();
+
+    // Register in tab group before creating session (getSiblings thunk captures id)
+    this.tabGroup.register(id, parent_session_id ?? null);
+
+    const getSiblings = () => this.tabGroup.siblings(id);
+
     const session = await this.factory({
-      ...opts,
+      ...rest,
+      profile,
       watchBus: this.watchBus,
       watchSessionId: id,
+      getSiblings,
     });
+
+    // Wrap snapshot() so sibling_sessions is always present and always up-to-date.
+    // Real Session instances receive getSiblings via factory opts and set the field
+    // themselves; for stub sessions in tests (which don't go through Session.create),
+    // this wrapper is the only thing that injects sibling_sessions. Wrapping both
+    // is harmless — the override wins, giving a single authoritative source.
+    // Guard: some test stubs don't expose snapshot() — skip wrapping for those.
+    if (typeof (session as unknown as { snapshot?: unknown }).snapshot === "function") {
+      const origSnapshot = (session as unknown as { snapshot: (...args: unknown[]) => Promise<unknown> }).snapshot.bind(session);
+      (session as unknown as { snapshot: (...args: unknown[]) => Promise<unknown> }).snapshot = async (...args: unknown[]) => {
+        const snap = await origSnapshot(...args);
+        if (snap && typeof snap === "object") {
+          (snap as Record<string, unknown>).sibling_sessions = getSiblings();
+        }
+        return snap;
+      };
+    }
+
     this.sessions.set(id, session);
     return id;
   }
@@ -53,14 +99,25 @@ export class SessionManager {
   }
 
   /**
-   * Close and remove a session. No-op if the id is unknown (idempotent
-   * close — agents may call this defensively).
+   * Close and remove a session. When closing the root of a tab group, cascade-
+   * closes all sibling sessions in the group. When closing a child, only that
+   * session is removed. Idempotent for unknown ids.
    */
   async close(id: string): Promise<void> {
     const s = this.sessions.get(id);
     if (!s) return;
-    this.sessions.delete(id);
-    await s.close();
+    // Determine which sessions need to be closed (cascade if root, single if child)
+    const toClose = this.tabGroup.closeGroup(id);
+    // Close all affected sessions
+    await Promise.all(
+      toClose.map(async (sid) => {
+        const sess = this.sessions.get(sid);
+        if (sess) {
+          this.sessions.delete(sid);
+          await sess.close();
+        }
+      })
+    );
   }
 
   async closeAll(): Promise<void> {
