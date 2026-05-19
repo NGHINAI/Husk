@@ -34,6 +34,7 @@ import { filterVisible } from "../snapshot/visible.js";
 import { captureScreenshot } from "../snapshot/screenshot.js";
 import { deriveApiHints } from "../snapshot/api-hints.js";
 import { DialogHandler } from "./dialog-handler.js";
+import { enrichWithShadow } from "../snapshot/shadow-walker.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -353,6 +354,20 @@ export class Session {
         // Graceful degrade: Page.getLayoutMetrics or DOM.getBoxModel unavailable.
         // Return the full (unfiltered) tree rather than throwing.
       }
+    }
+
+    // M15 T3: Shadow DOM piercing — enrich generic/Unknown/none nodes that may
+    // be custom-element shadow hosts. Engine-dependent; graceful no-op on
+    // lightpanda (DOM.describeNode returns quickly with no shadow roots).
+    // Must run BEFORE computeSignature so the signature reflects the enriched tree.
+    try {
+      const cdpProxy = {
+        send: (method: string, params: unknown) =>
+          this.cdp.send(method, params as Record<string, unknown>, this.sessionId),
+      };
+      snap.root = (await enrichWithShadow(cdpProxy, snap.root as any)) as unknown as typeof snap.root;
+    } catch {
+      // Graceful degrade: any unexpected error leaves the tree unchanged.
     }
 
     // M14 T2 + T10: Attach network ring buffer and derived API hints to snapshot.
