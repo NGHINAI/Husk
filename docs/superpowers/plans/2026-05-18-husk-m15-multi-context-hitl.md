@@ -2,9 +2,32 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
 
-**Goal:** Give agents the missing primitives for *collaborative* browsing — multi-tab sessions, the ability to ask the human a question, and a clean handoff for things only a human can solve (captchas, 2FA emails, judgment calls). The Watch UI becomes a two-way channel between the agent and the user.
+**Goal:** Give agents the missing primitives for *collaborative* browsing — multi-tab sessions, the ability to ask the human a question, and a clean handoff for anything only a human can solve. **The handoff is general-purpose**, not just for captchas — it covers any blocker. The user can answer/resume from **either** the agent's chat UI (Claude Desktop, Cursor, etc.) **or** the Watch UI — whichever they happen to have open.
 
-**MCP surface change:** **+2 tools** (`husk_ask_human`, `husk_handoff`). Multi-tab folds into existing `husk_create_session`. Dialog handling and Shadow DOM fold into snapshot. Tab listing folds into snapshot. Surface goes 18 → 20.
+### Handoff use cases (non-exhaustive)
+| Scenario | Why a human is needed |
+|---|---|
+| Captcha / hCaptcha / reCAPTCHA | Engine can't solve; human eyes required |
+| 2FA email/SMS code | Code lives outside the browser (email, phone) |
+| OAuth consent screen | Often gated by anti-bot heuristics; safer to have a human click |
+| Account creation requiring SMS verification | Same — needs out-of-band channel |
+| Destructive action confirmation | "About to delete 50 records — confirm?" |
+| Identity / KYC verification | Selfie, ID upload, liveness check |
+| Connecting a new external account | Plaid, Stripe, Google — flows that hate automation |
+| Ambiguous next step | "Which of these 3 looks right to you?" — use `husk_ask_human` instead (no pause) |
+| Payment confirmation | Final review of $X before charging the card |
+| Unrecoverable engine error | Lightpanda hit a hydration gap — let the human finish |
+
+**MCP surface change:** **+3 tools** (`husk_ask_human`, `husk_handoff`, `husk_resume`). Multi-tab folds into existing `husk_create_session`. Dialog handling, Shadow DOM, and tab listing fold into snapshot. Surface goes 18 → 21.
+
+### Two-surface design (the "both places" requirement)
+
+When the agent calls `husk_ask_human` or `husk_handoff`, Husk emits a pending event to Watch UI **and** returns surface metadata (`{question, options}` or `{reason, suggested_action, handoff_url}`) to the agent **immediately, non-blocking**. The agent's natural next chat message relays that to the user. The user can then answer/resume from **whichever surface they're already looking at**:
+
+- **Agent chat (Claude Desktop / Cursor / etc.)** — user types in chat → agent reads it → agent calls `husk_resume` (for handoff) or just continues with the answer (for questions; no tool call needed since LLM has the answer in context).
+- **Watch UI** — user clicks a button or types in the inline chat box → POSTs to `/ask/:token/answer` or `/handoff/:token/resume` → session resolved server-side → agent's next `husk_*` call succeeds.
+
+Either path converges on the same orchestrator endpoint. Whichever fires first wins; the other UI updates to "resolved".
 
 **Tech stack:** TypeScript orchestrator. New Hono routes under `/handoff/*` and `/ask/*` (127.0.0.1-only, same gating as `/watch`). New WatchBus event types (`pending_question`, `pending_handoff`, `resumed`). CDP `Page.javascriptDialogOpening` for modal-dialog auto-handling. CDP `Runtime.evaluate` over Shadow DOM roots for piercing. Better-sqlite3 for handoff-token storage (short-lived, in-memory cache OK for v1).
 
@@ -12,80 +35,97 @@
 
 ---
 
-## Walkthrough 1: Handoff flow (the captcha case)
+## Walkthrough 1: Handoff flow (general, non-blocking; works for ANY case)
 
 ```
 ┌──────────┐                  ┌────────────┐                  ┌──────────┐
 │  Agent   │                  │ Husk       │                  │  Human   │
-│ (Claude) │                  │ orchestr.  │                  │ (browser)│
+│ (Claude) │                  │ orchestr.  │                  │          │
 └────┬─────┘                  └─────┬──────┘                  └────┬─────┘
      │  husk_click(submit)         │                                 │
      │ ───────────────────────────►│                                 │
-     │                              │ lightpanda hits captcha         │
-     │                              │ ◄─────── 403 / challenge        │
-     │  watchdog rejects "blocked"  │                                 │
+     │                              │ blocked — captcha / 2FA /        │
+     │                              │ destructive confirmation / etc.  │
+     │  rejection or stuck state    │                                 │
      │ ◄────────────────────────────│                                 │
      │                              │                                 │
      │  husk_handoff({              │                                 │
      │    reason: "captcha",        │                                 │
-     │    suggested:                │                                 │
-     │      "complete the           │                                 │
-     │       hCaptcha challenge",   │                                 │
+     │    suggested_action:         │                                 │
+     │      "Solve the hCaptcha     │                                 │
+     │       on this page",         │                                 │
      │    need_cookies_back: true   │                                 │
      │  })                          │                                 │
      │ ───────────────────────────►│                                 │
-     │                              │ session.status = "handoff"      │
+     │                              │ session.pause()                 │
      │                              │ token = mint()                  │
      │                              │ Watch UI emits 'pending_handoff'│
-     │  [BLOCKED — agent waits]     │                                 │
+     │  RETURNS IMMEDIATELY:        │                                 │
+     │  { pending: true,            │                                 │
+     │    token: "abc",             │                                 │
+     │    handoff_url: "...",       │                                 │
+     │    surface: {                │                                 │
+     │      reason: "captcha",      │                                 │
+     │      suggested: "...",       │                                 │
+     │      current_url: "..."      │                                 │
+     │    }}                        │                                 │
+     │ ◄────────────────────────────│                                 │
      │                              │                                 │
-     │      [Agent's chat reply     │                                 │
-     │       includes the handoff   │                                 │
-     │       URL — Claude tells     │                                 │
-     │       user "I hit a captcha. │                                 │
-     │       Please open this URL:  │                                 │
-     │       http://127.0.0.1:7777/ │                                 │
-     │       handoff/abc123"]       │                                 │
+     │  Agent's NEXT chat reply:    │                                 │
+     │  "I'm blocked on a captcha   │                                 │
+     │   at <current_url>. You can: │                                 │
+     │   (a) reply 'done' here once │                                 │
+     │       you've handled it, OR  │                                 │
+     │   (b) open the live viewer:  │                                 │
+     │       <handoff_url>"         │                                 │
      │                              │                                 │
-     │                              │              ◄───── GET /handoff/abc123
-     │                              │              ─────► HTML page with:
-     │                              │                     - reason + suggested action
-     │                              │                     - "Open in browser" link to current_url
-     │                              │                     - Cookie paste textarea + bookmarklet
-     │                              │                     - "Resume agent" button
+     │  ─ ─ ─ ─ ─ TWO PATHS ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
      │                              │                                 │
-     │                              │                Human opens current_url in Chrome
-     │                              │                Solves captcha   │
-     │                              │                Captures cookies via bookmarklet OR devtools
+     │  PATH A — user types         │              PATH B — user opens
+     │   "done" in chat:            │              handoff_url in browser:
      │                              │                                 │
-     │                              │              ◄───── POST /handoff/abc123/resume
-     │                              │                     body: { cookies?: [...], note?: "done" }
-     │                              │ Import cookies via CDP          │
-     │                              │ Network.setCookies              │
-     │                              │ session.status = "active"       │
-     │                              │ Watch UI emits 'resumed'        │
-     │                              │              ─────► "Resumed!"  │
+     │  agent calls:                │              GET /handoff/abc   │
+     │  husk_resume({               │              ◄─── HTML page ────│
+     │    token, cookies?: [...],   │              with bookmarklet,  │
+     │    note: "captcha solved"    │              paste textarea,    │
+     │  })                          │              "Resume" button    │
+     │ ───────────────────────────►│                                 │
+     │                              │              user clicks Resume │
+     │                              │              POST /handoff/abc/resume
+     │                              │              { cookies?, note? }│
+     │                              │ ◄───────────────────────────────│
      │                              │                                 │
-     │  husk_handoff returns:       │                                 │
-     │    { resumed: true,          │                                 │
-     │      ms_paused: 47210,       │                                 │
-     │      cookies_imported: 4,    │                                 │
-     │      human_note: "done" }    │                                 │
+     │  (Whichever path fires first wins. The other UI updates to "resolved".)
+     │                              │ session.importCookies(...)      │
+     │                              │ session.resume()                │
+     │                              │ Watch UI emits 'resumed' event  │
+     │                              │ Agent chat shows "resumed"      │
+     │                              │                                 │
+     │  husk_resume returns OR      │                                 │
+     │  agent's next husk_* call    │                                 │
+     │  now succeeds:               │                                 │
+     │  { resumed: true,            │                                 │
+     │    ms_paused: 47210,         │                                 │
+     │    cookies_imported: 4 }     │                                 │
      │ ◄────────────────────────────│                                 │
      │                              │                                 │
      │  husk_click(submit)  [retry] │                                 │
-     │ ───────────────────────────► (now passes — captcha solved)     │
+     │ ───────────────────────────► (succeeds — block resolved)        │
 ```
 
 ### Design notes
 
-- **Pause semantics**: while `session.status === "handoff"`, ANY subsequent JSON-RPC method on that session returns `{ok: false, reason: "session_paused", handoff_url}`. The agent's `husk_handoff` call itself stays blocked (long-poll) until the human resolves it or `timeout_ms` elapses.
-- **Cookie capture options for the human** (pick one — v1 supports all three):
-  1. **Bookmarklet** (one-click): `javascript:fetch("http://127.0.0.1:7777/handoff/{token}/resume",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({cookies:document.cookie.split(";").map(c=>({raw:c.trim()}))})})`. The handoff page generates the exact bookmarklet, user drags it to bookmarks bar once.
-  2. **Devtools paste**: page has a textarea — user pastes the output of `document.cookie` from devtools console.
-  3. **Just click "Done"** (no cookie transfer): for non-captcha handoffs where the cookies in lightpanda are already enough. Agent gets `{cookies_imported: 0}` and retries blindly.
-- **Cross-origin caveat**: bookmarklets read cookies of the page they run on. The human must be on the *same domain* as `current_url` when they click the bookmarklet.
-- **Timeout**: `husk_handoff({timeout_ms: 600_000})` (default 10 min). On timeout, returns `{resumed: false, reason: "timeout"}` and the agent decides whether to abort or retry.
+- **Non-blocking**: `husk_handoff` returns immediately with the token + surface metadata. The agent uses the surface fields to write a natural chat message to the user. The session is paused server-side.
+- **Two surfaces, one backend**: both `husk_resume` (from chat) and `/handoff/:token/resume` (from Watch UI) call the same internal resume logic. Whichever fires first wins.
+- **Pause semantics**: while paused, ANY subsequent `husk_*` method on that session returns `{ok: false, reason: "session_paused", handoff_url, token}`. This means the agent doesn't even need to call `husk_resume` explicitly if the user resumed via Watch UI — the next ordinary action call just succeeds.
+- **Cookies are optional**:
+  - **With cookie transfer** (`need_cookies_back: true`): for captchas, anti-bot challenges, third-party auth where the human's browser earned cookies that Husk needs. Three ways to capture:
+    1. **Bookmarklet** (the handoff page generates one): `javascript:fetch("http://127.0.0.1:7777/handoff/{TOKEN}/resume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cookies: document.cookie.split(";").map(c => ({ raw: c.trim() })), note: "from bookmarklet" }) })`. User drags to bookmarks bar, clicks on the captcha page after solving.
+    2. **Devtools paste**: textarea on the handoff page; user pastes their `document.cookie` output.
+    3. **CLI `husk handoff-resume <token> --cookies <file>`**: for headless dev workflows.
+  - **Without cookie transfer** (default): for "approve this purchase", "is this the right address", "I'll let you connect your bank in another tab and tell me when done" — agent just retries with the session as-is. Cookies stay in lightpanda.
+- **Cross-origin caveat (cookie mode)**: bookmarklets read cookies of the page they run on. The human must be on the *same domain* as `current_url` when they click. The handoff page is on `127.0.0.1` so its own `document.cookie` is useless — that's why the user opens `current_url` in a separate tab first.
+- **Timeout**: `husk_handoff({timeout_ms: 600_000})` default 10 min. On timeout, paused state is auto-cleared and `husk_resume` returns `{resumed: false, reason: "timeout"}`. Watch UI banner clears too.
 
 ---
 
@@ -130,7 +170,7 @@
 
 ---
 
-## Walkthrough 3: Ask-human flow (decision points)
+## Walkthrough 3: Ask-human flow (non-blocking, dual-surface)
 
 ```
 ┌──────────┐                ┌────────────┐                ┌──────────┐
@@ -147,28 +187,62 @@
      │    timeout_ms: 300000     │                                │
      │  })                       │                                │
      │ ──────────────────────────►│                                │
+     │                            │ token = mint()                 │
      │                            │ Watch UI emits                 │
      │                            │ 'pending_question'             │
-     │                            │              ─────► (chip in UI)│
-     │                            │                                │
-     │   [agent blocks]           │                                │
-     │                            │                                │
-     │                            │              ◄───── (clicks option 0)
-     │                            │              POST /ask/abc/answer
-     │                            │              body: { answer: "Acme Widget $19", index: 0 }
-     │                            │                                │
-     │  returns:                  │                                │
-     │    { answer: "Acme...",    │                                │
-     │      index: 0,             │                                │
-     │      ms_waited: 8421 }     │                                │
+     │                            │              ─────► (chip in UI │
+     │                            │                       with options)│
+     │  RETURNS IMMEDIATELY:      │                                │
+     │  { pending: true,          │                                │
+     │    token: "abc",           │                                │
+     │    watch_url: "...",       │                                │
+     │    surface: {              │                                │
+     │      question: "Two...",   │                                │
+     │      options: [...]        │                                │
+     │    }}                      │                                │
      │ ◄──────────────────────────│                                │
+     │                            │                                │
+     │  Agent's NEXT chat reply   │                                │
+     │  uses `surface` to ask the │                                │
+     │  user in chat:             │                                │
+     │  "Two products match.      │                                │
+     │   Pick one:                │                                │
+     │   1) Acme Widget $19       │                                │
+     │   2) Beta Widget $22       │                                │
+     │   (or click in viewer:     │                                │
+     │    <watch_url>)"           │                                │
+     │                            │                                │
+     │  ─ ─ ─ ─ ─ TWO PATHS ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+     │                            │                                │
+     │  PATH A — chat answer:     │           PATH B — Watch UI answer:
+     │   user types "Acme" in chat│           user clicks option 0 in
+     │   → LLM reads it directly  │           Watch UI's question chip
+     │   → agent proceeds with    │                                │
+     │     "Acme" as the answer   │           POST /ask/abc/answer │
+     │                            │           { index: 0 }         │
+     │   (Optional logging):      │ ◄──────────────────────────────│
+     │   agent may call           │                                │
+     │   husk_resume({token,      │ Watch UI marks resolved        │
+     │     answer:"Acme"})        │                                │
+     │   to record the answer for │ (Optional: agent polls the     │
+     │   audit/session_history.   │  session — answer appears in   │
+     │   Not required.            │  next snapshot's history)      │
+     │                            │                                │
+     │  Either way, the next      │                                │
+     │  snapshot's session_history│                                │
+     │  records the human answer  │                                │
+     │  for future context.       │                                │
 ```
 
 ### Design notes
 
-- **Free-form questions**: if `options` is omitted, the Watch UI shows a textarea instead of buttons. Returns `{answer: "<typed text>"}`.
-- **Multiple selection (future)**: not in v1.
-- **Timeout returns `{timed_out: true}`** — agent decides retry/abort.
+- **Non-blocking**: `husk_ask_human` returns immediately with `{token, watch_url, surface}`. The agent uses `surface` to ask the user in chat naturally. The Watch UI also gets the question.
+- **Either surface answers**: user can type in chat (LLM hears it directly, no tool call required) OR click in Watch UI (server-side resolution). Whichever fires first wins.
+- **Free-form vs options**: if `options` is omitted, Watch UI shows a textarea; agent's chat message just asks the question normally.
+- **`husk_resume` works for ask too** (same token namespace). Useful for two cases:
+  1. Agent wants to formally record the chat answer in `session_history` for audit (`husk_resume({token, answer: "Acme"})`).
+  2. Agent wants to time-bound the question and check status — though usually the next snapshot's `session_history` is enough.
+- **Timeout**: `husk_ask_human({timeout_ms: 300_000})` default 5 min. On timeout, the token expires and the Watch UI chip clears. Agent gets nothing back unless it explicitly polls — for ask, that's fine since the user's silence IS the signal.
 
 ---
 
@@ -204,16 +278,20 @@
 | # | Task | Surface change | Model | Est |
 |---|---|---|---|---|
 | T1 | Tab group accounting + `parent_session_id` + `sibling_sessions` in snapshot + cascade close | snapshot field + create_session param | Sonnet | 2.5h |
-| T2 | Dialog auto-handler (auto-dismiss by default) + `husk_dialog({action})` opt-in + `snapshot.dialog` | snapshot field + new opt-in method | Sonnet | 2h |
+| T2 | Dialog auto-handler (auto-dismiss by default) + opt-in manual handling + `snapshot.dialog` | snapshot field + new RPC method (not MCP) | Sonnet | 2h |
 | T3 | Shadow DOM piercing in AX walker | snapshot internal | Sonnet | 2h |
-| T4 | HumanIOBus + handoff/ask token mint/resolve + session pause/resume | infra | Sonnet | 2.5h |
-| T5 | `husk_ask_human` — RPC method + MCP tool + SDKs + tests | **+1 new MCP tool** | Sonnet | 2h |
-| T6 | `husk_handoff` — RPC method + MCP tool + `/handoff/:token` page + cookie paste-back + SDKs | **+1 new MCP tool** | Sonnet | 3h |
-| T7 | Watch UI v2 — chat box for ask, status badge + handoff banner, tab list | embedded HTML | Sonnet | 2.5h |
-| T8 | Real-lightpanda integration test (full handoff round-trip + multi-tab + ask-human) | tests | Sonnet | 2h |
-| T9 | Spec §5.10 + README + memory + tag v0.0.14-m15 + merge --no-ff + push | docs | Haiku | 1h |
+| T4 | HumanIOBus + handoff/ask token mint/resolve + session pause; non-blocking RPC contract | infra | Sonnet | 2.5h |
+| T5 | `husk_ask_human` — non-blocking RPC + MCP tool + SDKs + tests | **+1 new MCP tool** | Sonnet | 2h |
+| T6 | `husk_handoff` — non-blocking RPC + MCP tool + `/handoff/:token` page + cookie paste-back + SDKs | **+1 new MCP tool** | Sonnet | 3h |
+| T7 | `husk_resume` — RPC + MCP tool + both surfaces converge (Watch UI POST and agent RPC call the same internal resume) + SDKs | **+1 new MCP tool** | Sonnet | 1.5h |
+| T8 | Watch UI v2 — chat box for ask, status badge + handoff banner, tab list, both inputs POST to resume | embedded HTML | Sonnet | 2.5h |
+| T9 | Real-lightpanda integration test (multi-tab + ask-human dual-surface + handoff dual-surface with cookies) | tests | Sonnet | 2.5h |
+| T10 | Spec §5.10 + README + memory + tag v0.0.14-m15 + merge --no-ff + push | docs | Haiku | 1h |
 
-**Total:** 9 tasks, ~19.5h (~2 days). **+2 MCP tools** (20 total after M15).
+**Total:** 10 tasks, ~21.5h (~2 days). **+3 MCP tools** (21 total after M15):
+- `husk_ask_human` — non-blocking; broadcasts question to chat + Watch UI; either surface answers
+- `husk_handoff` — non-blocking; pauses session; either surface resumes
+- `husk_resume` — agent-side resume entry point (Watch UI's button POSTs the same internal endpoint)
 
 ---
 
@@ -1060,7 +1138,12 @@ git push origin main && git push origin v0.0.14-m15
 
 **Type consistency:** `PendingDialog`, `PendingQuestion`, `PendingHandoff` shapes consistent across types.ts, bus.ts, and event emissions. `sibling_sessions: string[]` on Snapshot. ✓
 
-**Tool bloat check:** +2 new MCP tools (ask_human, handoff). Per Decision N both are genuinely distinct verbs ("wait for human input" is not click/type). Multi-tab, dialog, shadow-DOM, tab listing all fold into existing verbs or snapshot. ✓
+**Tool bloat check:** +3 new MCP tools (ask_human, handoff, resume). Per Decision N all three are genuinely distinct verbs:
+- "broadcast a question to chat + Watch UI" (ask_human) is not click/type
+- "pause and wait" (handoff) is not click/type
+- "tell Husk the human resolved a pending question/handoff" (resume) is the agent-side mirror of the Watch UI's POST — needed so the agent can act on chat-side answers when chat is the answering surface
+
+Multi-tab, dialog, shadow-DOM, tab listing all fold into existing verbs or snapshot. ✓
 
 **Edge cases handled:**
 - Handoff timeout returns `{resumed: false, reason: "timeout"}` — agent decides
