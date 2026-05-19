@@ -6,6 +6,8 @@ import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 import type { WaitForCondition, WaitForResult } from "../session/wait.js";
 import type { PaginateOpts } from "../session/paginate.js";
+import type { HumanIOBus } from "../hitl/bus.js";
+import type { WatchBus } from "../watch/sse.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -24,6 +26,10 @@ export interface MethodContext {
    * socket resolves the ephemeral port (port 0 → actual port).
    */
   portRef?: { value: number };
+  /** Human-in-the-loop bus for ask_human / handoff primitives. */
+  humanIO?: HumanIOBus;
+  /** Watch event bus — needed so ask_human can emit pending_question events. */
+  watchBus?: WatchBus;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -41,10 +47,9 @@ export interface CreateSessionResult {
 }
 
 /** Result of `goto`. */
-export interface GotoResult {
-  ok: true;
-  snapshot?: import("../snapshot/types.js").Snapshot;
-}
+export type GotoResult =
+  | { ok: true; snapshot?: import("../snapshot/types.js").Snapshot }
+  | { ok: false; reason: "session_paused"; token: string; handoff_url: string | null };
 
 /** Result of `close_session`. Also returned when the id was unknown (idempotent). */
 export interface CloseSessionResult {
@@ -61,10 +66,13 @@ export const METHODS = {
   },
 
   async create_session(
-    params: { profile?: string } | undefined,
+    params: { profile?: string; parent_session_id?: string } | undefined,
     ctx: MethodContext
   ): Promise<CreateSessionResult> {
-    const session_id = await ctx.sessions.create({ profile: params?.profile });
+    const session_id = await ctx.sessions.create({
+      profile: params?.profile,
+      parent_session_id: params?.parent_session_id,
+    });
     const watch_url =
       ctx.host === "127.0.0.1" && ctx.portRef != null
         ? `http://127.0.0.1:${ctx.portRef.value}/watch?s=${encodeURIComponent(session_id)}`
@@ -300,6 +308,22 @@ export const METHODS = {
     return { results };
   },
 
+  /**
+   * Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+   *
+   * Exposed via JSON-RPC only — NOT in the MCP tool surface (see mcp/src/tool-surface.ts).
+   * Auto-dismiss handles 99% of cases; this method exists for the rare case where
+   * the agent needs to explicitly accept/respond to a dialog.
+   */
+  async dialog(
+    params: { session_id: string; action: "accept" | "dismiss"; text?: string },
+    ctx: MethodContext
+  ): Promise<{ ok: true }> {
+    const session = ctx.sessions.get(params.session_id);
+    await session.handleDialog(params.action, params.text);
+    return { ok: true };
+  },
+
   async wait_for(
     params: { session_id: string } & WaitForCondition,
     ctx: MethodContext
@@ -326,6 +350,210 @@ export const METHODS = {
       { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
       { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
     );
+  },
+
+  /**
+   * Ask the human a question — NON-BLOCKING. Returns immediately with a token
+   * + watch_url + surface metadata. The agent should relay surface.question
+   * (and surface.options if present) to the user in its next chat message.
+   * Either chat reply or Watch UI button click resolves the token.
+   */
+  /**
+   * Pause the session and ask the human to take over (non-blocking).
+   * Returns immediately with {pending: true, token, handoff_url, surface}.
+   * The session is paused server-side; any further action calls return
+   * {ok:false, reason:'session_paused'} until resumed.
+   */
+  async handoff(
+    params: {
+      session_id: string;
+      reason: string;
+      suggested_action?: string;
+      need_cookies_back?: boolean;
+      timeout_ms?: number;
+    },
+    ctx: MethodContext,
+  ) {
+    if (!params.reason?.trim()) {
+      throw new Error("handoff requires a non-empty reason");
+    }
+    if (!ctx.humanIO) {
+      throw new Error("handoff is not available: humanIO bus not initialised");
+    }
+    const session = ctx.sessions.get(params.session_id);
+    const current_url = session.getCurrentUrl?.() ?? null;
+    const timeoutMs = params.timeout_ms ?? 600_000;
+
+    const { token, promise } = ctx.humanIO.startHandoff(
+      params.session_id,
+      {
+        reason: params.reason,
+        suggested_action: params.suggested_action,
+        current_url: current_url ?? undefined,
+        need_cookies_back: params.need_cookies_back,
+      },
+      timeoutMs,
+    );
+
+    const handoff_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://${ctx.host}:${ctx.portRef.value}/handoff/${token}`
+        : null;
+
+    // Pause the session AFTER we have the handoff_url so we can embed it in the pause state
+    session.pause({ token, handoff_url });
+
+    // Emit pending_handoff to Watch UI
+    ctx.watchBus?.emit(params.session_id, {
+      kind: "pending_handoff",
+      ts: Date.now(),
+      token,
+      reason: params.reason,
+      suggested_action: params.suggested_action,
+      current_url: current_url ?? undefined,
+      handoff_url,
+      need_cookies_back: params.need_cookies_back,
+    });
+
+    // Fire-and-forget: when the bus resolves (via Watch UI POST or via husk_resume in T7),
+    // import cookies and unpause the session.
+    void promise.then(async (resolved) => {
+      if (resolved.resumed && resolved.cookies && resolved.cookies.length > 0) {
+        try { await session.importCookies(resolved.cookies); } catch { /* swallow */ }
+      }
+      session.resume();
+      // Emit resolved event
+      ctx.watchBus?.emit(params.session_id, {
+        kind: "resolved",
+        ts: Date.now(),
+        token,
+        kind_resolved: "handoff",
+      });
+    }).catch(() => {
+      // If something blew up, still unpause so the agent isn't stuck forever
+      session.resume();
+    });
+
+    return {
+      pending: true as const,
+      token,
+      handoff_url,
+      surface: {
+        reason: params.reason,
+        ...(params.suggested_action ? { suggested_action: params.suggested_action } : {}),
+        ...(current_url ? { current_url } : {}),
+      },
+    };
+  },
+
+  /**
+   * Agent-side resume entry — resolves a pending question or unpauses a
+   * handoff when the human answered in chat rather than the Watch UI.
+   *
+   * NOTE: This method accepts (ctx, params) when called directly (e.g. from
+   * tests or SDK wrappers) and also works when the JSON-RPC dispatcher calls
+   * it as (params, ctx) — the implementation detects which ordering is in use
+   * by checking which argument contains `humanIO`.
+   */
+  async resume(
+    ctxOrParams: MethodContext | {
+      token: string;
+      answer?: string;
+      index?: number;
+      cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+      note?: string;
+    },
+    paramsOrCtx: {
+      token: string;
+      answer?: string;
+      index?: number;
+      cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+      note?: string;
+    } | MethodContext
+  ): Promise<
+    | { ok: true; kind: "question" | "handoff" }
+    | { ok: false; reason: "unknown_token" }
+  > {
+    // Detect argument order: ctx always has `humanIO`; params always has `token`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasHumanIO = (v: any): v is MethodContext => v != null && typeof v === "object" && "humanIO" in v;
+    const ctx = hasHumanIO(ctxOrParams) ? ctxOrParams : (paramsOrCtx as MethodContext);
+    const params = hasHumanIO(ctxOrParams)
+      ? (paramsOrCtx as { token: string; answer?: string; index?: number; cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>; note?: string })
+      : (ctxOrParams as { token: string; answer?: string; index?: number; cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>; note?: string });
+
+    const question = ctx.humanIO?.getQuestion(params.token) ?? null;
+    if (question) {
+      ctx.humanIO!.answerQuestion(params.token, { answer: params.answer, index: params.index });
+      ctx.watchBus?.emit(question.session_id, {
+        kind: "resolved",
+        ts: Date.now(),
+        token: params.token,
+        kind_resolved: "question",
+      });
+      return { ok: true, kind: "question" };
+    }
+    const handoff = ctx.humanIO?.getHandoff(params.token) ?? null;
+    if (handoff) {
+      ctx.humanIO!.resumeHandoff(params.token, {
+        cookies: params.cookies,
+        note: params.note,
+      });
+      // The handoff promise resolver (set up in the handoff method) handles
+      // importCookies + session.resume + emits resolved — no need to emit here.
+      return { ok: true, kind: "handoff" };
+    }
+    return { ok: false, reason: "unknown_token" };
+  },
+
+  async ask_human(
+    params: {
+      session_id: string;
+      question: string;
+      options?: string[];
+      timeout_ms?: number;
+    },
+    ctx: MethodContext
+  ) {
+    if (!params.question?.trim()) {
+      throw new Error("ask_human requires a non-empty question");
+    }
+    if (!ctx.humanIO) {
+      throw new Error("ask_human is not available: humanIO bus not initialised");
+    }
+    const timeoutMs = params.timeout_ms ?? 300_000;
+    const { token, promise } = ctx.humanIO.askQuestion(
+      params.session_id,
+      { question: params.question, options: params.options },
+      timeoutMs,
+    );
+    // Fire-and-forget: the promise resolves when the question is answered or
+    // times out. We just prevent unhandled-rejection warnings on timeout.
+    void promise.catch(() => {});
+
+    // Emit pending_question so the Watch UI can surface the question.
+    ctx.watchBus?.emit(params.session_id, {
+      kind: "pending_question",
+      ts: Date.now(),
+      token,
+      question: params.question,
+      options: params.options,
+    });
+
+    const watch_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://${ctx.host}:${ctx.portRef.value}/watch?s=${encodeURIComponent(params.session_id)}`
+        : null;
+
+    return {
+      pending: true,
+      token,
+      watch_url,
+      surface: {
+        question: params.question,
+        ...(params.options !== undefined ? { options: params.options } : {}),
+      },
+    };
   },
 } as const;
 

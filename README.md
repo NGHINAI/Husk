@@ -319,6 +319,65 @@ M14: `goto → click → extract` (3 turns). Each click/goto carries its post-sn
 
 MCP surface unchanged: 18 tools.
 
+## Multi-Context + Human-in-the-Loop (M15)
+
+Three new primitives unlock the workflows agents couldn't do alone:
+
+### Multi-tab (folds into create_session)
+
+```ts
+const tabA = await husk.createSession({});                              // root tab
+const tabB = await husk.createSession({ parent_session_id: tabA.id });  // sibling tab
+const tabC = await husk.createSession({ parent_session_id: tabA.id });  // another sibling
+
+await tabA.goto("https://amazon.com/widget");
+await tabB.goto("https://walmart.com/widget");
+await tabC.goto("https://target.com/widget");
+
+const snapA = await tabA.snapshot();
+// snapA.sibling_sessions === [tabB.id, tabC.id]
+
+await tabA.close();  // cascade-closes tabB and tabC too
+```
+
+### Ask the human a question
+
+```ts
+const r = await session.askHuman({
+  question: "Two products match. Pick one:",
+  options: ["Acme Widget $19.99", "Beta Widget $22.49"],
+});
+// r === { pending: true, token: "...", watch_url: "...", surface: {...} }
+// Agent relays surface.question + options to chat. User answers in chat OR in Watch UI.
+// Whichever fires first wins.
+```
+
+### Handoff (for ANY case where a human is needed)
+
+```ts
+const r = await session.handoff({
+  reason: "captcha",
+  suggested_action: "Solve the hCaptcha then come back to resume",
+  need_cookies_back: true,
+});
+// Session is paused server-side. Subsequent click/type/etc. return session_paused.
+// User opens r.handoff_url, solves the captcha, captures cookies via bookmarklet.
+// Husk imports cookies, unpauses the session. Next agent action succeeds.
+```
+
+Use cases: captcha, 2FA, OAuth consent, account verification, KYC, connecting external accounts, payment confirmation, destructive-action approval, unrecoverable engine errors.
+
+### Watch UI v2
+
+Live `/watch` viewer now shows:
+- **Sibling tab chips** — click to switch viewer between tabs in a group
+- **Inline question banner** — answer the agent's question without leaving the viewer
+- **Inline handoff banner** — link to the handoff page for cookie capture + resume
+
+### MCP surface
+
+**21 tools total**, +3 from M14: `husk_ask_human`, `husk_handoff`, `husk_resume`. Everything else folds into existing verbs.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing

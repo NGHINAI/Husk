@@ -5,4 +5,7 @@ export type WatchEvent =
   | { kind: "action"; ts: number; verb: "click" | "type" | "scroll" | "press_key" | "upload"; stable_id: string | null; ok: boolean; diff?: { added: number; removed: number; changed: number } }
   | { kind: "rejection"; ts: number; verb: string; reason: string; candidates: Array<{ stable_id: string; role: string; name: string; score: number }> }
   | { kind: "navigation"; ts: number; url: string }
-  | { kind: "find"; ts: number; intent: string; candidates: FindCandidate[] };
+  | { kind: "find"; ts: number; intent: string; candidates: FindCandidate[] }
+  | { kind: "pending_question"; ts: number; token: string; question: string; options?: string[] }
+  | { kind: "pending_handoff"; ts: number; token: string; reason: string; suggested_action?: string; current_url?: string; handoff_url: string | null; need_cookies_back?: boolean }
+  | { kind: "resolved"; ts: number; token: string; kind_resolved: "question" | "handoff" };

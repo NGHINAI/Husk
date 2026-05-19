@@ -670,6 +670,94 @@ Opt out via `include_snapshot: false`.
 
 ---
 
+### 5.10 Multi-Context + Human-in-the-Loop (M15 — shipped 2026-05-19)
+
+#### Motivation
+
+Through M14, agents could read a rich snapshot, drive any action, and return results in 3 turns instead of 5. But three big gaps remained: (a) only one tab per session (no comparison shopping, no multi-account), (b) no way to ask the human a question when ambiguous, (c) no clean handoff for things only a human can solve (captchas, 2FA, OAuth consent, KYC, payment confirmation, identity verification, etc.).
+
+M15 closes all three with **+3 new MCP tools**: `husk_ask_human`, `husk_handoff`, `husk_resume`. Multi-tab folds into existing `husk_create_session`. Dialog auto-handling and Shadow DOM piercing fold into snapshot.
+
+**Surface goes 18 → 21.** Per Decision N, the three new tools earn their slots because each represents a genuinely distinct verb (wait-for-human-input is not click/type; pause-the-session is not click/type; resume-on-behalf-of-human is the chat-side mirror of a Watch UI button — needed so the agent can resolve from chat-side).
+
+#### Multi-tab
+
+`husk_create_session({parent_session_id})` creates a sibling session that shares the parent's cookie profile. Each `husk_snapshot` includes `sibling_sessions: string[]` so the agent never needs a `husk_list_tabs` tool. Closing the root tears down the entire group; closing a child only closes that child.
+
+**Cookie sharing across siblings** requires an explicit `profile` on the parent (M8a cookie vault). Without a profile, siblings are sandboxed by the engine.
+
+#### Dialog handling
+
+`alert()` / `confirm()` / `prompt()` / `beforeunload` previously deadlocked the page. M15 auto-dismisses any dialog after 100ms. Agents can opt into manual handling via the `dialog` JSON-RPC method (not in MCP surface — rare). `snapshot.dialog` surfaces pending dialogs.
+
+#### Shadow DOM piercing
+
+Web Components (Stripe Checkout, design systems) hid their content from the AX tree. M15 walks shadow roots on `generic`/`Unknown`/`none` AX nodes via CDP `DOM.describeNode` + `Accessibility.getPartialAXTree`. Engine-dependent; degrades gracefully on engines without these CDP calls.
+
+#### `husk_ask_human` — non-blocking, dual-surface
+
+Agent calls `husk_ask_human({question, options?, timeout_ms?})`. Returns IMMEDIATELY with `{pending, token, watch_url, surface: {question, options?}}`.
+
+Two surfaces to answer from, whichever the user reaches first:
+- **Watch UI**: clicks an option button (or types into a textarea). POSTs to `/ask/:token/answer`. Bus resolves; Watch UI updates.
+- **Agent chat**: user types reply directly in the chat client (Claude Desktop, etc.). The LLM hears the answer and proceeds; optionally calls `husk_resume({token, answer})` to log it in `session_history`.
+
+#### `husk_handoff` — non-blocking pause for ANY human task
+
+Agent calls `husk_handoff({reason, suggested_action?, need_cookies_back?, timeout_ms?})`. The session pauses immediately; any subsequent action call returns `{ok: false, reason: "session_paused", token, handoff_url}` until resumed. The method returns `{pending, token, handoff_url, surface: {reason, suggested_action?, current_url?}}`.
+
+**Use cases**: captcha, 2FA email/SMS, OAuth consent, account verification, KYC/identity check, connecting external accounts (Plaid/Stripe/Google), payment confirmation, destructive-action approval, unrecoverable engine error. Not just captcha — anywhere a human is the only path forward.
+
+**Handoff page** at `/handoff/:token` is a dark-themed single-file HTML viewer that:
+- Shows the reason + suggested action
+- Provides a clickable link to `current_url` (opens in a new tab)
+- Offers three cookie-capture options:
+  1. **Bookmarklet**: drag to bookmarks, click on the target domain after solving
+  2. **Devtools paste**: textarea accepting `name=value` lines or full `document.cookie`
+  3. **No cookies**: "Resume agent" button without any transfer
+
+**Cookie roundtrip**: when the user POSTs cookies (any of the three modes), `Session.importCookies` calls CDP `Network.setCookies` to install them into the lightpanda session. Engine-dependent — gracefully degrades if `Network.setCookies` isn't implemented.
+
+#### `husk_resume` — agent-side resume entry
+
+Mirror of the Watch UI's Resume button, but callable from the agent. When the user completes a handoff or answers a question **in chat**, the agent calls `husk_resume({token, answer?, index?, cookies?, note?})`. Auto-routes to whichever bus has the token (question or handoff). Unknown tokens return `{ok: false, reason: "unknown_token"}`.
+
+Same backend as `/ask/:token/answer` and `/handoff/:token/resume` — whichever surface fires first wins; the other observes a `resolved` SSE event and clears its banner.
+
+#### Watch UI v2
+
+Builds on M13's `/watch` viewer. New components:
+- **Sibling tab chips** in the header — clickable, switches the viewer to that session
+- **Status badge** now has multiple states: `live` (green), `paused (handoff)` (warn), `needs answer (question)` (accent), `disconnected` (red)
+- **Question banner** — full-width, accent-colored, with option buttons or textarea + send button
+- **Handoff banner** — full-width, warn-colored, with link to handoff page
+
+Same dark / monospace aesthetic. Self-contained HTML (~12 KB), no external assets.
+
+#### Decisions
+
+**Decision R — HITL is local-only.** Both `/ask/:token/answer` and `/handoff/:token/resume` are gated by `host === "127.0.0.1"`, matching the Watch UI policy. No remote attack surface. If the orchestrator is bound to `0.0.0.0`, watch_url and handoff_url are `null` — agents see this and skip the Watch-UI offer.
+
+**Decision S — Tab groups share cookies, never JS/DOM state.** Each session is an independent engine process. Tabs in a group are semantically siblings (like browser tabs on the same domain) but DOM/JS state is per-tab. Sharing is via the M8a cookie vault profile.
+
+**Decision T — Both-surface answer/resume is the rule.** Every HITL primitive (`ask_human`, `handoff`) accepts resolution from EITHER the chat surface (via `husk_resume`) OR the Watch UI surface (via POST). Both paths converge on the same internal bus method. Whichever fires first wins.
+
+#### MCP surface
+
+**21 tools, +3 from M14**: `husk_ask_human`, `husk_handoff`, `husk_resume`. All other M15 capabilities fold into existing verbs:
+- Multi-tab: `husk_create_session({parent_session_id})`
+- Dialog: snapshot.dialog field (JSON-RPC `dialog` method exists, not in MCP)
+- Shadow DOM: snapshot AX tree (silent enrichment)
+- Sibling tabs: snapshot.sibling_sessions field
+
+#### Limitations
+
+- Lightpanda may not implement `Page.javascriptDialogOpening`, `DOM.describeNode` shadowRoots, or `Network.setCookies`. All three degrade gracefully. The Chrome adapter (v0.3) will close these gaps.
+- Cookie sharing across siblings requires explicit `profile` on parent. Default behavior is sandboxed per-session.
+- `husk_resume` is global (not per-session) — tokens are UUIDs and identify the session implicitly via the bus.
+
+---
+
 ## 6. Developer Experience — How Agents Access Husk
 
 Four interfaces. All v0. All routed through the same JSON-RPC orchestrator.

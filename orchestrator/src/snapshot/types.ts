@@ -56,6 +56,9 @@ export interface SnapshotNode {
   c?: SnapshotNode[];
 }
 
+/** M15 T2: Pending JS dialog exposed in snapshot. */
+export type { PendingDialog } from "../session/dialog-handler.js";
+
 /** M14: Forward-declared types for new Snapshot envelope fields (T2-T10). */
 export interface SnapshotNetwork {
   /** Recent network requests captured via CDP (ring buffer, last 100 per session). */
@@ -115,6 +118,16 @@ export interface Snapshot {
 
   /** T8: Optional page image (base64 PNG, only when include_image=true). */
   image_b64?: string;
+
+  /** M15 T1: Other session ids in the same tab group (sharing cookie profile).
+   *  Always present as an array (empty for solo sessions). Agents can reliably
+   *  check `sibling_sessions.length` without guarding for undefined. */
+  sibling_sessions: string[];
+
+  /** M15 T2: Pending JS dialog (alert/confirm/prompt/beforeunload).
+   *  Only present when a dialog is currently blocking the page.
+   *  Absent when no dialog is open — agents should guard with `snap.dialog?.`. */
+  dialog?: import("../session/dialog-handler.js").PendingDialog;
 }
 
 // ----- Diff types for mutation poller (Task 7) -----

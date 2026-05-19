@@ -13,6 +13,7 @@ import type { PolicyDocument } from "./watchdog/types.js";
 import { EnginePool } from "./engine/pool.js";
 import { locateLightpanda } from "./engine/binary.js";
 import { WatchBus } from "./watch/sse.js";
+import { HumanIOBus } from "./hitl/bus.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -159,6 +160,9 @@ async function runServer(args: StartArgs): Promise<void> {
   // Watch event bus: per-session in-memory pub/sub for the /watch/stream SSE route.
   const watchBus = new WatchBus();
 
+  // Human-in-the-loop bus: coordinates ask_human / handoff primitives.
+  const humanIO = new HumanIOBus();
+
   const sessions = new SessionManager(async (opts) => {
     const engineHandle = await pool.acquire();
     try {
@@ -189,6 +193,7 @@ async function runServer(args: StartArgs): Promise<void> {
     vault,
     credentials,
     watchBus,
+    humanIO,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM

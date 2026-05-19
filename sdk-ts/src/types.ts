@@ -28,6 +28,8 @@ export interface Snapshot {
   url: string;
   count: number;
   root: SnapshotNode;
+  /** Other session ids in the same tab group (sharing cookie profile). Empty for solo sessions. */
+  sibling_sessions: string[];
 }
 
 export interface SnapshotDiff {
@@ -53,7 +55,8 @@ export type RejectionReason =
   | "policy_domain_denied"
   | "no_match"
   | "ambiguous_intent"
-  | "missing_target";
+  | "missing_target"
+  | "session_paused";
 
 export interface RejectionEnvelope {
   ok: false;

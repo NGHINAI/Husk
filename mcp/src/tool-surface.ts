@@ -13,11 +13,12 @@ export interface ToolSpec {
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
-    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. IMPORTANT: when watch_url is non-null, on your VERY NEXT message to the user (before any further tool calls), include one sentence like \"Want to watch what I'm seeing? Open <watch_url>\" with the literal URL pasted in. This is the only way the user learns the live viewer exists — do not skip it, do not summarize it, do not paraphrase the URL. The URL opens a live view of the AX tree, your actions, and rejections; it is local-only (127.0.0.1, no network exposure).",
+    description: "Husk — Create a new browser session. Returns {session_id, watch_url}. Pass `profile` to bind cookies. SAFE TO CALL IN PARALLEL: Husk pre-warms a pool of engine processes and scales up to the system's memory limit when many sessions are requested concurrently — you can return many tool_use blocks in one turn for fan-out tasks. IMPORTANT: when watch_url is non-null, on your VERY NEXT message to the user (before any further tool calls), include one sentence like \"Want to watch what I'm seeing? Open <watch_url>\" with the literal URL pasted in. This is the only way the user learns the live viewer exists — do not skip it, do not summarize it, do not paraphrase the URL. The URL opens a live view of the AX tree, your actions, and rejections; it is local-only (127.0.0.1, no network exposure).\n\nWHEN TO USE parent_session_id: To open another tab in the same browser context (shared cookies), pass {parent_session_id: existing_session_id}. The new session is a sibling — it has its own URL and JS state but shares the cookie profile, so authenticated state carries over. snapshot.sibling_sessions on every snapshot lists all tabs in the group. Use this for comparison shopping, multi-account workflows, or any task where two URLs share login state. husk_close_session on the root tears down the whole group; on a child, just closes that tab. NOTE: cookie sharing in v1 only works when the parent was created with an explicit `profile` name — if the parent has no profile, siblings get isolated cookie jars (lightpanda limitation).\n\nWHAT YOU GET: {session_id, watch_url}. (sibling_sessions is on each session's snapshot, not on the create_session response.)",
     inputSchema: {
       type: "object",
       properties: {
         profile: { type: "string", description: "Optional profile name to restore cookies from" },
+        parent_session_id: { type: "string", description: "Optional. To open a sibling tab in an existing tab group, pass the session_id of any session in the group. The new session shares the cookie profile but has independent URL/JS state." },
       },
     },
   },
@@ -292,6 +293,61 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id"],
     },
   },
+  {
+    name: "husk_ask_human",
+    description: "husk_ask_human — Ask the human a question (non-blocking; broadcasts to chat AND the Watch UI).\n\nWHEN TO USE: When you genuinely need a human decision — multiple matches with no clear winner, missing context the user has but you don't (which receipt? which address?), confirmation before a destructive action. NOT for things you can figure out yourself.\n\nWHAT YOU GET: Returns IMMEDIATELY with {pending: true, token, watch_url, surface: {question, options?}}. Your job: take the `surface` fields and ask the user in your NEXT chat message naturally. The Watch UI also shows the question with answer buttons. Whichever surface answers first wins.\n\nAFTER THE USER ANSWERS:\n- If they answer in CHAT: you already have the answer — just proceed with it. Optional: call husk_resume({token, answer}) to record it in session_history for audit.\n- If they answer in the WATCH UI: their answer is recorded server-side. You can pick it up in the next snapshot's session_history if you need to.\n\nDO NOT: Use as a fallback for 'I'm confused' — try harder first. Every question costs the user attention. Don't ask consecutively when one question covers it.\n\nParams: session_id (string), question (string — write it as you'd say it), options? (string[] — for multiple choice; omit for free-form text), timeout_ms? (default 300000).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        question: { type: "string", description: "The question to ask the human." },
+        options: { type: "array", items: { type: "string" }, description: "Optional multiple-choice options. If present, Watch UI shows buttons; omit for free-form textarea." },
+        timeout_ms: { type: "number", description: "How long to keep the question alive server-side. Default 300000 (5 min)." },
+      },
+      required: ["session_id", "question"],
+    },
+  },
+  {
+    name: "husk_handoff",
+    description: "husk_handoff — Pause the session and ask the human to take over (non-blocking; works for ANY case where a human is needed).\n\nWHEN TO USE: When you cannot proceed without a human action. Examples: captcha challenge, 2FA email/SMS code, OAuth consent screen, account verification, destructive-action approval, identity (KYC) check, connecting an external account (Plaid/Stripe/Google), payment confirmation, unrecoverable engine error. The watchdog has rejected or the page is asking for something only a human can provide.\n\nWHAT YOU GET: Returns IMMEDIATELY with {pending: true, token, handoff_url, surface: {reason, suggested_action?, current_url?}}. The session is paused server-side — any further husk_* calls on it return {ok:false, reason:'session_paused'} until resumed. Your job: relay the situation to the user in your NEXT chat message, including the handoff_url so they can open it. The Watch UI ALSO shows a banner.\n\nWHILE PAUSED: User can resume from EITHER surface — chat or Watch UI. From chat: when user says done, call husk_resume({token, note?}). From Watch UI: user clicks Resume, server-side handles it. Whichever fires first wins.\n\nCOOKIE TRANSFER: Pass need_cookies_back: true ONLY when the human's browser will earn cookies you need (captcha cookies, anti-bot tokens, third-party auth state). Default false — for 'approve this purchase' / 'is this the right address' / decision points, cookies aren't needed.\n\nAFTER RESUME: Your next husk_* call succeeds. Retry whatever was blocked.\n\nDO NOT: Use for routine questions — use husk_ask_human instead (doesn't pause the session).\n\nParams: session_id, reason (short, e.g. 'captcha', '2FA required', 'needs human credential'), suggested_action? (longer prose for the user), need_cookies_back? (default false), timeout_ms? (default 600000).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        reason: { type: "string", description: "Short label for why a human is needed. Surfaces to the user in the Watch UI banner." },
+        suggested_action: { type: "string", description: "Optional longer description of what you want the user to do." },
+        need_cookies_back: { type: "boolean", description: "When true, the handoff page shows cookie-capture options (bookmarklet, paste). Default false." },
+        timeout_ms: { type: "number", description: "How long the session stays paused before auto-resuming with timeout. Default 600000 (10 min)." },
+      },
+      required: ["session_id", "reason"],
+    },
+  },
+  {
+    name: "husk_resume",
+    description: "husk_resume — Record a human answer or resume a paused handoff (use when the user replied in CHAT instead of the Watch UI).\n\nWHEN TO USE: After husk_ask_human or husk_handoff, if the user answered/completed the action via your chat conversation (not by clicking in the Watch UI), call this to tell Husk. If the user answered in the Watch UI, you don't need to call this — Husk already knows. Whichever surface fires first wins.\n\nWHAT YOU GET: {ok: true, kind: 'question'|'handoff'} on success; {ok: false, reason: 'unknown_token'} if the token expired or doesn't exist.\n\nFOR QUESTIONS: Pass token + answer (string the user said) or index (if you offered options). Optional but recommended — it logs the answer in session_history for audit, even though you already have it in chat.\n\nFOR HANDOFFS: Pass token + optional cookies (if you have any to import — usually no for chat-resumed handoffs since cookies need bookmarklet/devtools capture). Pass note for an audit trail. After this call, the session is unpaused and your next husk_* call succeeds.\n\nParams: token (from the original husk_ask_human or husk_handoff call), answer? (for questions), index? (for questions with options), cookies? (for handoffs), note? (for handoffs).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: { type: "string" },
+        answer: { type: "string" },
+        index: { type: "number" },
+        cookies: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              value: { type: "string" },
+              domain: { type: "string" },
+              raw: { type: "string" },
+            },
+          },
+        },
+        note: { type: "string" },
+      },
+      required: ["token"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -312,6 +368,9 @@ const RPC_MAP: Record<string, string> = {
   husk_batch_visit: "batch_visit",
   husk_wait_for: "wait_for",
   husk_upload: "upload",
+  husk_ask_human: "ask_human",
+  husk_handoff: "handoff",
+  husk_resume: "resume",
 };
 
 const VERSION = "0.0.0";

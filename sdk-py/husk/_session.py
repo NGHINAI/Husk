@@ -322,5 +322,111 @@ class Session:
             return result["text"]
         return result
 
+    async def handle_dialog(self, action: str, *, text: Optional[str] = None) -> None:
+        """Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+
+        No-op when no dialog is open. Auto-dismiss handles 99% of cases;
+        use this when you need to explicitly accept/respond (e.g. prompt dialogs).
+
+        :param action: ``"accept"`` or ``"dismiss"``.
+        :param text:   Optional response text for ``prompt`` dialogs.
+        """
+        params: dict[str, Any] = {"session_id": self._id, "action": action}
+        if text is not None:
+            params["text"] = text
+        await self._client.call("dialog", params)
+
+    async def ask_human(
+        self,
+        *,
+        question: str,
+        options: Optional[list[str]] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> dict:
+        """Ask the human a question — NON-BLOCKING.
+
+        Returns immediately with ``{pending, token, watch_url, surface}``.
+        Relay ``surface["question"]`` (and ``surface["options"]`` if present)
+        in your next chat message. Whichever surface (chat or Watch UI) answers
+        first wins.
+
+        :param question: The question to ask the human.
+        :param options:  Optional list of multiple-choice options.
+        :param timeout_ms: How long to keep the question alive (default 300000 ms).
+        """
+        params: dict = {"session_id": self._id, "question": question}
+        if options is not None:
+            params["options"] = options
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+        return await self._client.call("ask_human", params)
+
+    async def handoff(
+        self,
+        *,
+        reason: str,
+        suggested_action: Optional[str] = None,
+        need_cookies_back: Optional[bool] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> dict:
+        """Pause the session and hand control to the human — NON-BLOCKING.
+
+        Returns immediately with ``{pending, token, handoff_url, surface}``.
+        The session is paused server-side; all action calls return
+        ``session_paused`` until resumed. Relay the ``handoff_url`` and
+        ``surface["reason"]`` to the user so they know what to do.
+
+        :param reason: Short label for why a human is needed (e.g. "captcha",
+            "2FA required"). Shown in the Watch UI banner and handoff page.
+        :param suggested_action: Optional longer description of what the user
+            should do before resuming.
+        :param need_cookies_back: When True, the handoff page shows cookie-
+            capture options (bookmarklet, devtools paste). Default False.
+        :param timeout_ms: How long the session stays paused before auto-
+            resuming with a timeout result. Default 600000 ms (10 min).
+        """
+        params: dict = {"session_id": self._id, "reason": reason}
+        if suggested_action is not None:
+            params["suggested_action"] = suggested_action
+        if need_cookies_back is not None:
+            params["need_cookies_back"] = need_cookies_back
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+        return await self._client.call("handoff", params)
+
+    async def resume(
+        self,
+        *,
+        token: str,
+        answer: Optional[str] = None,
+        index: Optional[int] = None,
+        cookies: Optional[list[dict]] = None,
+        note: Optional[str] = None,
+    ) -> dict:
+        """Record a human answer or resume a paused handoff (agent-side relay).
+
+        Call this when the user replied in chat rather than via the Watch UI.
+        Whichever surface fires first wins — the other will observe "resolved".
+
+        :param token:   Token from the original ask_human or handoff call.
+        :param answer:  For questions — the text the user said (free-form).
+        :param index:   For questions with options — the selected option index.
+        :param cookies: For handoffs — optional cookies to import.
+        :param note:    For handoffs — optional audit note.
+
+        Returns ``{ok: True, kind: "question"|"handoff"}`` on success,
+        or ``{ok: False, reason: "unknown_token"}`` if the token expired.
+        """
+        params: dict = {"token": token}
+        if answer is not None:
+            params["answer"] = answer
+        if index is not None:
+            params["index"] = index
+        if cookies is not None:
+            params["cookies"] = cookies
+        if note is not None:
+            params["note"] = note
+        return await self._client.call("resume", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

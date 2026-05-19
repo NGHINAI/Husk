@@ -138,6 +138,69 @@ export class Session {
     return result.result ?? result.text ?? result;
   }
 
+  /**
+   * Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+   * No-op when no dialog is open. Auto-dismiss handles 99% of cases;
+   * use this when you need to explicitly accept/respond (e.g. prompt dialogs).
+   */
+  async handleDialog(action: "accept" | "dismiss", text?: string): Promise<void> {
+    await this.client.call("dialog", { session_id: this.id, action, text });
+  }
+
+  /**
+   * Ask the human a question — NON-BLOCKING.
+   * Returns immediately with {pending, token, watch_url, surface}.
+   * Relay surface.question (and surface.options if present) in your next chat message.
+   */
+  async askHuman(input: { question: string; options?: string[]; timeout_ms?: number }): Promise<{
+    pending: true;
+    token: string;
+    watch_url: string | null;
+    surface: { question: string; options?: string[] };
+  }> {
+    return await this.client.call("ask_human", { session_id: this.id, ...input });
+  }
+
+  /**
+   * Pause the session and hand control to the human — NON-BLOCKING.
+   * Returns immediately with {pending: true, token, handoff_url, surface}.
+   * The session is paused server-side; all action calls return session_paused until resumed.
+   * Relay handoff_url (and surface.reason + surface.suggested_action) to the user.
+   */
+  async handoff(input: {
+    reason: string;
+    suggested_action?: string;
+    need_cookies_back?: boolean;
+    timeout_ms?: number;
+  }): Promise<{
+    pending: true;
+    token: string;
+    handoff_url: string | null;
+    surface: { reason: string; suggested_action?: string; current_url?: string };
+  }> {
+    return await this.client.call("handoff", { session_id: this.id, ...input });
+  }
+
+  /**
+   * Record a human answer or resume a paused handoff (agent-side relay).
+   *
+   * Call this when the user replied in chat rather than via the Watch UI.
+   * Whichever surface fires first wins — the other will observe "resolved".
+   *
+   * For questions: pass `answer` (free-form) or `index` (when options were offered).
+   * For handoffs: pass optional `cookies` and/or `note`. After this call the session
+   * is unpaused and the next husk_* action call will succeed.
+   */
+  async resume(input: {
+    token: string;
+    answer?: string;
+    index?: number;
+    cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+    note?: string;
+  }): Promise<{ ok: true; kind: "question" | "handoff" } | { ok: false; reason: "unknown_token" }> {
+    return await this.client.call("resume", input);
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }
