@@ -9,7 +9,9 @@ import type { SessionManager } from "../session/manager.js";
 import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import type { WatchBus } from "../watch/sse.js";
+import type { HumanIOBus } from "../hitl/bus.js";
 import { WATCH_HTML } from "../watch/index.html.js";
+import { registerHitlRoutes } from "./hitl-routes.js";
 
 export interface HuskServerOptions {
   port: number;
@@ -23,6 +25,8 @@ export interface HuskServerOptions {
   logLevel?: string;
   /** Watch event bus for the /watch/stream SSE route. Only registered when host === "127.0.0.1". */
   watchBus?: WatchBus;
+  /** Human-in-the-loop bus for ask_human / handoff answer routes. Only registered when host === "127.0.0.1". */
+  humanIO?: HumanIOBus;
 }
 
 export interface HuskServer {
@@ -52,6 +56,8 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
     credentials: opts.credentials,
     host: opts.host,
     portRef,
+    humanIO: opts.humanIO,
+    watchBus: opts.watchBus,
   };
 
   app.post("/v1/jsonrpc", async (c) => {
@@ -102,6 +108,11 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
         });
       });
     });
+  }
+
+  // HITL answer routes — only registered when loopback + both buses are present.
+  if (opts.host === "127.0.0.1" && opts.humanIO) {
+    registerHitlRoutes(app, { humanIO: opts.humanIO, watchBus: opts.watchBus });
   }
 
   const server = await new Promise<ServerType>((resolve) => {

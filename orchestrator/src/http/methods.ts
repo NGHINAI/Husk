@@ -6,6 +6,8 @@ import type { CredentialsStore } from "../credentials/store.js";
 import { batchVisit, type BatchVisitParams, type BatchVisitItem } from "./batch.js";
 import type { WaitForCondition, WaitForResult } from "../session/wait.js";
 import type { PaginateOpts } from "../session/paginate.js";
+import type { HumanIOBus } from "../hitl/bus.js";
+import type { WatchBus } from "../watch/sse.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -24,6 +26,10 @@ export interface MethodContext {
    * socket resolves the ephemeral port (port 0 → actual port).
    */
   portRef?: { value: number };
+  /** Human-in-the-loop bus for ask_human / handoff primitives. */
+  humanIO?: HumanIOBus;
+  /** Watch event bus — needed so ask_human can emit pending_question events. */
+  watchBus?: WatchBus;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -344,6 +350,62 @@ export const METHODS = {
       { stable_id: params.stable_id, intent: params.intent, include_snapshot: params.include_snapshot },
       { file_path: params.file_path, content_base64: params.content_base64, filename: params.filename }
     );
+  },
+
+  /**
+   * Ask the human a question — NON-BLOCKING. Returns immediately with a token
+   * + watch_url + surface metadata. The agent should relay surface.question
+   * (and surface.options if present) to the user in its next chat message.
+   * Either chat reply or Watch UI button click resolves the token.
+   */
+  async ask_human(
+    params: {
+      session_id: string;
+      question: string;
+      options?: string[];
+      timeout_ms?: number;
+    },
+    ctx: MethodContext
+  ) {
+    if (!params.question?.trim()) {
+      throw new Error("ask_human requires a non-empty question");
+    }
+    if (!ctx.humanIO) {
+      throw new Error("ask_human is not available: humanIO bus not initialised");
+    }
+    const timeoutMs = params.timeout_ms ?? 300_000;
+    const { token, promise } = ctx.humanIO.askQuestion(
+      params.session_id,
+      { question: params.question, options: params.options },
+      timeoutMs,
+    );
+    // Fire-and-forget: the promise resolves when the question is answered or
+    // times out. We just prevent unhandled-rejection warnings on timeout.
+    void promise.catch(() => {});
+
+    // Emit pending_question so the Watch UI can surface the question.
+    ctx.watchBus?.emit(params.session_id, {
+      kind: "pending_question",
+      ts: Date.now(),
+      token,
+      question: params.question,
+      options: params.options,
+    });
+
+    const watch_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://${ctx.host}:${ctx.portRef.value}/watch?s=${encodeURIComponent(params.session_id)}`
+        : null;
+
+    return {
+      pending: true,
+      token,
+      watch_url,
+      surface: {
+        question: params.question,
+        ...(params.options !== undefined ? { options: params.options } : {}),
+      },
+    };
   },
 } as const;
 

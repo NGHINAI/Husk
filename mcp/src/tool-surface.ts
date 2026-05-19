@@ -293,6 +293,20 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id"],
     },
   },
+  {
+    name: "husk_ask_human",
+    description: "husk_ask_human — Ask the human a question (non-blocking; broadcasts to chat AND the Watch UI).\n\nWHEN TO USE: When you genuinely need a human decision — multiple matches with no clear winner, missing context the user has but you don't (which receipt? which address?), confirmation before a destructive action. NOT for things you can figure out yourself.\n\nWHAT YOU GET: Returns IMMEDIATELY with {pending: true, token, watch_url, surface: {question, options?}}. Your job: take the `surface` fields and ask the user in your NEXT chat message naturally. The Watch UI also shows the question with answer buttons. Whichever surface answers first wins.\n\nAFTER THE USER ANSWERS:\n- If they answer in CHAT: you already have the answer — just proceed with it. Optional: call husk_resume({token, answer}) to record it in session_history for audit.\n- If they answer in the WATCH UI: their answer is recorded server-side. You can pick it up in the next snapshot's session_history if you need to.\n\nDO NOT: Use as a fallback for 'I'm confused' — try harder first. Every question costs the user attention. Don't ask consecutively when one question covers it.\n\nParams: session_id (string), question (string — write it as you'd say it), options? (string[] — for multiple choice; omit for free-form text), timeout_ms? (default 300000).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        question: { type: "string", description: "The question to ask the human." },
+        options: { type: "array", items: { type: "string" }, description: "Optional multiple-choice options. If present, Watch UI shows buttons; omit for free-form textarea." },
+        timeout_ms: { type: "number", description: "How long to keep the question alive server-side. Default 300000 (5 min)." },
+      },
+      required: ["session_id", "question"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -313,6 +327,7 @@ const RPC_MAP: Record<string, string> = {
   husk_batch_visit: "batch_visit",
   husk_wait_for: "wait_for",
   husk_upload: "upload",
+  husk_ask_human: "ask_human",
 };
 
 const VERSION = "0.0.0";

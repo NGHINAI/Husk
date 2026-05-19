@@ -147,6 +147,20 @@ export class Session {
     await this.client.call("dialog", { session_id: this.id, action, text });
   }
 
+  /**
+   * Ask the human a question — NON-BLOCKING.
+   * Returns immediately with {pending, token, watch_url, surface}.
+   * Relay surface.question (and surface.options if present) in your next chat message.
+   */
+  async askHuman(input: { question: string; options?: string[]; timeout_ms?: number }): Promise<{
+    pending: true;
+    token: string;
+    watch_url: string | null;
+    surface: { question: string; options?: string[] };
+  }> {
+    return await this.client.call("ask_human", { session_id: this.id, ...input });
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }

@@ -336,5 +336,30 @@ class Session:
             params["text"] = text
         await self._client.call("dialog", params)
 
+    async def ask_human(
+        self,
+        *,
+        question: str,
+        options: Optional[list[str]] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> dict:
+        """Ask the human a question — NON-BLOCKING.
+
+        Returns immediately with ``{pending, token, watch_url, surface}``.
+        Relay ``surface["question"]`` (and ``surface["options"]`` if present)
+        in your next chat message. Whichever surface (chat or Watch UI) answers
+        first wins.
+
+        :param question: The question to ask the human.
+        :param options:  Optional list of multiple-choice options.
+        :param timeout_ms: How long to keep the question alive (default 300000 ms).
+        """
+        params: dict = {"session_id": self._id, "question": question}
+        if options is not None:
+            params["options"] = options
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+        return await self._client.call("ask_human", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})
