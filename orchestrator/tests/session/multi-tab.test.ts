@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { Session } from "../../src/session/session.js";
 import { SessionManager } from "../../src/session/manager.js";
 
 describe("SessionManager multi-tab", () => {
@@ -65,5 +66,29 @@ describe("SessionManager multi-tab", () => {
     const factory = async () => ({ id: "x", close: async () => {}, snapshot: async () => ({}) } as any);
     const sm = new SessionManager(factory);
     await expect(sm.create({ parent_session_id: "ghost" })).rejects.toThrow(/unknown parent/);
+  });
+
+  it("fromInjected snapshot has empty sibling_sessions (back-compat)", async () => {
+    const cdp = {
+      send: vi.fn(async (method: string) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return {
+            nodes: [{
+              nodeId: "1", role: { type: "role", value: "RootWebArea" },
+              name: { type: "computedString", value: "" }, properties: [], childIds: [],
+            }],
+          };
+        }
+        return null;
+      }),
+      close: async () => {},
+    };
+    const session = Session.fromInjected({
+      engine: { close: async () => {} },
+      cdp,
+      sessionId: "s1",
+    });
+    const snap = await session.snapshot();
+    expect(snap.sibling_sessions).toEqual([]);
   });
 });

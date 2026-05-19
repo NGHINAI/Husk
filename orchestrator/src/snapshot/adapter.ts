@@ -108,7 +108,7 @@ export function transformAxTree(
   if (Array.isArray(result)) {
     throw new Error("transformAxTree: root resolved to passthrough nodes only");
   }
-  return { v: 1, url, count, root: result, _resolver: resolver };
+  return { v: 1, url, count, root: result, _resolver: resolver, sibling_sessions: [] };
 }
 
 function computeStateFlags(

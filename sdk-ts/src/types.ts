@@ -28,6 +28,8 @@ export interface Snapshot {
   url: string;
   count: number;
   root: SnapshotNode;
+  /** Other session ids in the same tab group (sharing cookie profile). Empty for solo sessions. */
+  sibling_sessions: string[];
 }
 
 export interface SnapshotDiff {
