@@ -181,6 +181,26 @@ export class Session {
     return await this.client.call("handoff", { session_id: this.id, ...input });
   }
 
+  /**
+   * Record a human answer or resume a paused handoff (agent-side relay).
+   *
+   * Call this when the user replied in chat rather than via the Watch UI.
+   * Whichever surface fires first wins — the other will observe "resolved".
+   *
+   * For questions: pass `answer` (free-form) or `index` (when options were offered).
+   * For handoffs: pass optional `cookies` and/or `note`. After this call the session
+   * is unpaused and the next husk_* action call will succeed.
+   */
+  async resume(input: {
+    token: string;
+    answer?: string;
+    index?: number;
+    cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+    note?: string;
+  }): Promise<{ ok: true; kind: "question" | "handoff" } | { ok: false; reason: "unknown_token" }> {
+    return await this.client.call("resume", input);
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }

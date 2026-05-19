@@ -394,5 +394,39 @@ class Session:
             params["timeout_ms"] = timeout_ms
         return await self._client.call("handoff", params)
 
+    async def resume(
+        self,
+        *,
+        token: str,
+        answer: Optional[str] = None,
+        index: Optional[int] = None,
+        cookies: Optional[list[dict]] = None,
+        note: Optional[str] = None,
+    ) -> dict:
+        """Record a human answer or resume a paused handoff (agent-side relay).
+
+        Call this when the user replied in chat rather than via the Watch UI.
+        Whichever surface fires first wins — the other will observe "resolved".
+
+        :param token:   Token from the original ask_human or handoff call.
+        :param answer:  For questions — the text the user said (free-form).
+        :param index:   For questions with options — the selected option index.
+        :param cookies: For handoffs — optional cookies to import.
+        :param note:    For handoffs — optional audit note.
+
+        Returns ``{ok: True, kind: "question"|"handoff"}`` on success,
+        or ``{ok: False, reason: "unknown_token"}`` if the token expired.
+        """
+        params: dict = {"token": token}
+        if answer is not None:
+            params["answer"] = answer
+        if index is not None:
+            params["index"] = index
+        if cookies is not None:
+            params["cookies"] = cookies
+        if note is not None:
+            params["note"] = note
+        return await self._client.call("resume", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

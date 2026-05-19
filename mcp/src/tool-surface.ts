@@ -322,6 +322,32 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id", "reason"],
     },
   },
+  {
+    name: "husk_resume",
+    description: "husk_resume — Record a human answer or resume a paused handoff (use when the user replied in CHAT instead of the Watch UI).\n\nWHEN TO USE: After husk_ask_human or husk_handoff, if the user answered/completed the action via your chat conversation (not by clicking in the Watch UI), call this to tell Husk. If the user answered in the Watch UI, you don't need to call this — Husk already knows. Whichever surface fires first wins.\n\nWHAT YOU GET: {ok: true, kind: 'question'|'handoff'} on success; {ok: false, reason: 'unknown_token'} if the token expired or doesn't exist.\n\nFOR QUESTIONS: Pass token + answer (string the user said) or index (if you offered options). Optional but recommended — it logs the answer in session_history for audit, even though you already have it in chat.\n\nFOR HANDOFFS: Pass token + optional cookies (if you have any to import — usually no for chat-resumed handoffs since cookies need bookmarklet/devtools capture). Pass note for an audit trail. After this call, the session is unpaused and your next husk_* call succeeds.\n\nParams: token (from the original husk_ask_human or husk_handoff call), answer? (for questions), index? (for questions with options), cookies? (for handoffs), note? (for handoffs).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: { type: "string" },
+        answer: { type: "string" },
+        index: { type: "number" },
+        cookies: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              value: { type: "string" },
+              domain: { type: "string" },
+              raw: { type: "string" },
+            },
+          },
+        },
+        note: { type: "string" },
+      },
+      required: ["token"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -344,6 +370,7 @@ const RPC_MAP: Record<string, string> = {
   husk_upload: "upload",
   husk_ask_human: "ask_human",
   husk_handoff: "handoff",
+  husk_resume: "resume",
 };
 
 const VERSION = "0.0.0";

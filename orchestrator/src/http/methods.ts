@@ -446,6 +446,66 @@ export const METHODS = {
     };
   },
 
+  /**
+   * Agent-side resume entry — resolves a pending question or unpauses a
+   * handoff when the human answered in chat rather than the Watch UI.
+   *
+   * NOTE: This method accepts (ctx, params) when called directly (e.g. from
+   * tests or SDK wrappers) and also works when the JSON-RPC dispatcher calls
+   * it as (params, ctx) — the implementation detects which ordering is in use
+   * by checking which argument contains `humanIO`.
+   */
+  async resume(
+    ctxOrParams: MethodContext | {
+      token: string;
+      answer?: string;
+      index?: number;
+      cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+      note?: string;
+    },
+    paramsOrCtx: {
+      token: string;
+      answer?: string;
+      index?: number;
+      cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>;
+      note?: string;
+    } | MethodContext
+  ): Promise<
+    | { ok: true; kind: "question" | "handoff" }
+    | { ok: false; reason: "unknown_token" }
+  > {
+    // Detect argument order: ctx always has `humanIO`; params always has `token`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasHumanIO = (v: any): v is MethodContext => v != null && typeof v === "object" && "humanIO" in v;
+    const ctx = hasHumanIO(ctxOrParams) ? ctxOrParams : (paramsOrCtx as MethodContext);
+    const params = hasHumanIO(ctxOrParams)
+      ? (paramsOrCtx as { token: string; answer?: string; index?: number; cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>; note?: string })
+      : (ctxOrParams as { token: string; answer?: string; index?: number; cookies?: Array<{ name: string; value: string; domain?: string; raw?: string }>; note?: string });
+
+    const question = ctx.humanIO?.getQuestion(params.token) ?? null;
+    if (question) {
+      ctx.humanIO!.answerQuestion(params.token, { answer: params.answer, index: params.index });
+      ctx.watchBus?.emit(question.session_id, {
+        kind: "resolved",
+        ts: Date.now(),
+        token: params.token,
+        kind_resolved: "question",
+      });
+      return { ok: true, kind: "question" };
+    }
+    const handoff = ctx.humanIO?.getHandoff(params.token) ?? null;
+    if (handoff) {
+      ctx.humanIO!.resumeHandoff(params.token, {
+        cookies: params.cookies,
+        note: params.note,
+      });
+      // The handoff promise resolver (set up in the handoff method) handles
+      // importCookies + session.resume + emits resolved — no need to emit here.
+      return { ok: true, kind: "handoff" };
+    }
+    return { ok: false, reason: "unknown_token" };
+  },
+
   async ask_human(
     params: {
       session_id: string;
