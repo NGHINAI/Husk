@@ -41,7 +41,8 @@ export type RejectionReason =
   | "wrong_role_for_action"
   | "policy_forbidden"
   | "policy_required_before"
-  | "policy_domain_denied";
+  | "policy_domain_denied"
+  | "session_paused";
 
 /**
  * Soft notice returned alongside `ok: true` when a `warn`-severity rule fires

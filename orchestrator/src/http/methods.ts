@@ -41,10 +41,9 @@ export interface CreateSessionResult {
 }
 
 /** Result of `goto`. */
-export interface GotoResult {
-  ok: true;
-  snapshot?: import("../snapshot/types.js").Snapshot;
-}
+export type GotoResult =
+  | { ok: true; snapshot?: import("../snapshot/types.js").Snapshot }
+  | { ok: false; reason: "session_paused"; token: string; handoff_url: string | null };
 
 /** Result of `close_session`. Also returned when the id was unknown (idempotent). */
 export interface CloseSessionResult {

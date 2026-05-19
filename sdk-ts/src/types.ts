@@ -55,7 +55,8 @@ export type RejectionReason =
   | "policy_domain_denied"
   | "no_match"
   | "ambiguous_intent"
-  | "missing_target";
+  | "missing_target"
+  | "session_paused";
 
 export interface RejectionEnvelope {
   ok: false;

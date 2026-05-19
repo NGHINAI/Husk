@@ -35,6 +35,7 @@ import { captureScreenshot } from "../snapshot/screenshot.js";
 import { deriveApiHints } from "../snapshot/api-hints.js";
 import { DialogHandler } from "./dialog-handler.js";
 import { enrichWithShadow } from "../snapshot/shadow-walker.js";
+import type { ResumeCookie } from "../hitl/types.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -118,6 +119,8 @@ export class Session {
   /** networkIdleMs passed to waitForPageReady. Production default: 500.
    *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
   private networkIdleMs = 500;
+  /** HITL pause state. When non-null, all action methods are gated. Snapshot still works. */
+  private paused: { token: string; handoff_url: string | null } | null = null;
   /** Ring buffer of recent CDP Network events. Populated after Session.create(). */
   private networkBuffer = new NetworkBuffer(100);
   /** Ring buffer of recent console messages (Runtime + Log CDP events). */
@@ -269,7 +272,10 @@ export class Session {
     return inst;
   }
 
-  async goto(url: string, opts: { include_snapshot?: boolean } = {}): Promise<{ ok: true; snapshot?: Snapshot }> {
+  async goto(url: string, opts: { include_snapshot?: boolean } = {}): Promise<{ ok: true; snapshot?: Snapshot } | { ok: false; reason: "session_paused"; token: string; handoff_url: string | null }> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused", token: this.paused.token, handoff_url: this.paused.handoff_url };
+    }
     await this.cdp.send("Page.navigate", { url }, this.sessionId);
     this.currentUrl = url;
     // Track goto in history (no target_name for navigation)
@@ -434,6 +440,61 @@ export class Session {
 
   setPolicy(policy: PolicyDocument | null): void {
     this.watchdog.setPolicy(policy);
+  }
+
+  // ---------------------------------------------------------------------------
+  // HITL pause/resume primitives (M15 T4)
+  // ---------------------------------------------------------------------------
+
+  /** Pause the session. All action methods will return {ok:false, reason:"session_paused"} until resume(). Snapshot is NOT gated. */
+  pause(handoffInfo: { token: string; handoff_url: string | null }): void {
+    this.paused = handoffInfo;
+  }
+
+  /** Ungate action methods — session returns to normal operation. */
+  resume(): void {
+    this.paused = null;
+  }
+
+  /** Returns the current pause state, or null when not paused. */
+  isPaused(): { token: string; handoff_url: string | null } | null {
+    return this.paused;
+  }
+
+  /** Best-effort current URL — used by handoff payload. */
+  getCurrentUrl(): string | null {
+    return this.currentUrl ?? null;
+  }
+
+  /**
+   * Import cookies into the session via CDP Network.setCookies.
+   * Handles both structured ResumeCookie objects and raw `name=value` strings.
+   * Degrades gracefully if Network.setCookies is unavailable.
+   * Returns the number of cookies actually imported.
+   */
+  async importCookies(cookies: ResumeCookie[]): Promise<number> {
+    type CdpCookieParam = { name: string; value: string; domain?: string; path: string; expires?: number };
+    const cdpCookies: CdpCookieParam[] = [];
+    for (const c of cookies) {
+      if (c.raw) {
+        const eq = c.raw.indexOf("=");
+        if (eq < 1) continue;
+        const name = c.raw.slice(0, eq).trim();
+        const value = c.raw.slice(eq + 1).trim();
+        if (!name) continue;
+        cdpCookies.push({ name, value, domain: c.domain, path: c.path ?? "/" });
+      } else {
+        if (!c.name) continue;
+        cdpCookies.push({ name: c.name, value: c.value, domain: c.domain, path: c.path ?? "/", expires: c.expires });
+      }
+    }
+    if (cdpCookies.length === 0) return 0;
+    try {
+      await this.cdp.send("Network.setCookies", { cookies: cdpCookies }, this.sessionId);
+      return cdpCookies.length;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -785,6 +846,9 @@ export class Session {
    * (saves tokens when you don't need post-state).
    */
   async click(target: (Target & { include_snapshot?: boolean }) | string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
     const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
     const doSnap = include_snapshot !== false;
@@ -808,6 +872,9 @@ export class Session {
    * Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
   async type(target: (Target & { include_snapshot?: boolean }) | string, text: string): Promise<ActionResultWithSnapshot<ActionResultWithIntent>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
     const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
     const doSnap = include_snapshot !== false;
@@ -844,6 +911,9 @@ export class Session {
     amount?: number,
     opts?: { until?: WaitForCondition; max_scrolls?: number; scroll_amount_px?: number; include_snapshot?: boolean },
   ): Promise<ActionResultWithSnapshot<ActionResultWithIntent> | ActionResultWithSnapshot<ScrollUntilResult>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     // Scroll-until mode: delegate to runScrollUntil.
     if (opts?.until) {
       const doSnap = opts.include_snapshot !== false;
@@ -891,6 +961,9 @@ export class Session {
    * Press a key. Pass `include_snapshot: false` to opt out of the post-action snapshot.
    */
   async press_key(key: string, opts: { include_snapshot?: boolean } = {}): Promise<ActionResultWithSnapshot<ActionResult>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     const doSnap = opts.include_snapshot !== false;
     const before = await this.snapshot();
     const pre = this.watchdog.evaluatePre(before, "press_key", null);
@@ -943,6 +1016,9 @@ export class Session {
     target: (Target & { include_snapshot?: boolean }) | string,
     fileSpec: { file_path?: string; content_base64?: string; filename?: string },
   ): Promise<ActionResultWithSnapshot<UploadResult & { candidates?: FindCandidate[] }>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     const t: Target & { include_snapshot?: boolean } = typeof target === "string" ? { stable_id: target } : target;
     const { include_snapshot, ...tTarget } = t as { include_snapshot?: boolean } & Target;
     const doSnap = include_snapshot !== false;
@@ -958,6 +1034,9 @@ export class Session {
   }
 
   async login(input: LoginInput & { totp_secret?: string; include_snapshot?: boolean }): Promise<ActionResultWithSnapshot<LoginResult>> {
+    if (this.paused) {
+      return { ok: false, reason: "session_paused" as any, token: this.paused.token, handoff_url: this.paused.handoff_url } as any;
+    }
     const doSnap = input.include_snapshot !== false;
     const code = input.totp_code ?? (input.totp_secret ? totpCode(input.totp_secret) : undefined);
     const result = await performLogin(
@@ -1092,6 +1171,9 @@ export class Session {
   }
 
   async extract(query: ExtractQuery): Promise<string | null | Record<string, string | null> | PaginateResult> {
+    if (this.paused) {
+      return null;
+    }
     // Paginate mode: when paginate option is present, run the click-next loop.
     if (query.paginate) {
       const paginateOpts = query.paginate;
