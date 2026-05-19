@@ -112,7 +112,7 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
 
   // HITL answer routes — only registered when loopback + both buses are present.
   if (opts.host === "127.0.0.1" && opts.humanIO) {
-    registerHitlRoutes(app, { humanIO: opts.humanIO, watchBus: opts.watchBus });
+    registerHitlRoutes(app, { humanIO: opts.humanIO, watchBus: opts.watchBus, host: opts.host, portRef });
   }
 
   const server = await new Promise<ServerType>((resolve) => {

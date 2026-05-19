@@ -358,6 +358,94 @@ export const METHODS = {
    * (and surface.options if present) to the user in its next chat message.
    * Either chat reply or Watch UI button click resolves the token.
    */
+  /**
+   * Pause the session and ask the human to take over (non-blocking).
+   * Returns immediately with {pending: true, token, handoff_url, surface}.
+   * The session is paused server-side; any further action calls return
+   * {ok:false, reason:'session_paused'} until resumed.
+   */
+  async handoff(
+    params: {
+      session_id: string;
+      reason: string;
+      suggested_action?: string;
+      need_cookies_back?: boolean;
+      timeout_ms?: number;
+    },
+    ctx: MethodContext,
+  ) {
+    if (!params.reason?.trim()) {
+      throw new Error("handoff requires a non-empty reason");
+    }
+    if (!ctx.humanIO) {
+      throw new Error("handoff is not available: humanIO bus not initialised");
+    }
+    const session = ctx.sessions.get(params.session_id);
+    const current_url = session.getCurrentUrl?.() ?? null;
+    const timeoutMs = params.timeout_ms ?? 600_000;
+
+    const { token, promise } = ctx.humanIO.startHandoff(
+      params.session_id,
+      {
+        reason: params.reason,
+        suggested_action: params.suggested_action,
+        current_url: current_url ?? undefined,
+        need_cookies_back: params.need_cookies_back,
+      },
+      timeoutMs,
+    );
+
+    const handoff_url =
+      ctx.host === "127.0.0.1" && ctx.portRef != null
+        ? `http://${ctx.host}:${ctx.portRef.value}/handoff/${token}`
+        : null;
+
+    // Pause the session AFTER we have the handoff_url so we can embed it in the pause state
+    session.pause({ token, handoff_url });
+
+    // Emit pending_handoff to Watch UI
+    ctx.watchBus?.emit(params.session_id, {
+      kind: "pending_handoff",
+      ts: Date.now(),
+      token,
+      reason: params.reason,
+      suggested_action: params.suggested_action,
+      current_url: current_url ?? undefined,
+      handoff_url,
+      need_cookies_back: params.need_cookies_back,
+    });
+
+    // Fire-and-forget: when the bus resolves (via Watch UI POST or via husk_resume in T7),
+    // import cookies and unpause the session.
+    void promise.then(async (resolved) => {
+      if (resolved.resumed && resolved.cookies && resolved.cookies.length > 0) {
+        try { await session.importCookies(resolved.cookies); } catch { /* swallow */ }
+      }
+      session.resume();
+      // Emit resolved event
+      ctx.watchBus?.emit(params.session_id, {
+        kind: "resolved",
+        ts: Date.now(),
+        token,
+        kind_resolved: "handoff",
+      });
+    }).catch(() => {
+      // If something blew up, still unpause so the agent isn't stuck forever
+      session.resume();
+    });
+
+    return {
+      pending: true as const,
+      token,
+      handoff_url,
+      surface: {
+        reason: params.reason,
+        ...(params.suggested_action ? { suggested_action: params.suggested_action } : {}),
+        ...(current_url ? { current_url } : {}),
+      },
+    };
+  },
+
   async ask_human(
     params: {
       session_id: string;

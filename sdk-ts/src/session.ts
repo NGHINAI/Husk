@@ -161,6 +161,26 @@ export class Session {
     return await this.client.call("ask_human", { session_id: this.id, ...input });
   }
 
+  /**
+   * Pause the session and hand control to the human — NON-BLOCKING.
+   * Returns immediately with {pending: true, token, handoff_url, surface}.
+   * The session is paused server-side; all action calls return session_paused until resumed.
+   * Relay handoff_url (and surface.reason + surface.suggested_action) to the user.
+   */
+  async handoff(input: {
+    reason: string;
+    suggested_action?: string;
+    need_cookies_back?: boolean;
+    timeout_ms?: number;
+  }): Promise<{
+    pending: true;
+    token: string;
+    handoff_url: string | null;
+    surface: { reason: string; suggested_action?: string; current_url?: string };
+  }> {
+    return await this.client.call("handoff", { session_id: this.id, ...input });
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }

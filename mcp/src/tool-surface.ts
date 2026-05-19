@@ -307,6 +307,21 @@ export const TOOL_SURFACE: ToolSpec[] = [
       required: ["session_id", "question"],
     },
   },
+  {
+    name: "husk_handoff",
+    description: "husk_handoff — Pause the session and ask the human to take over (non-blocking; works for ANY case where a human is needed).\n\nWHEN TO USE: When you cannot proceed without a human action. Examples: captcha challenge, 2FA email/SMS code, OAuth consent screen, account verification, destructive-action approval, identity (KYC) check, connecting an external account (Plaid/Stripe/Google), payment confirmation, unrecoverable engine error. The watchdog has rejected or the page is asking for something only a human can provide.\n\nWHAT YOU GET: Returns IMMEDIATELY with {pending: true, token, handoff_url, surface: {reason, suggested_action?, current_url?}}. The session is paused server-side — any further husk_* calls on it return {ok:false, reason:'session_paused'} until resumed. Your job: relay the situation to the user in your NEXT chat message, including the handoff_url so they can open it. The Watch UI ALSO shows a banner.\n\nWHILE PAUSED: User can resume from EITHER surface — chat or Watch UI. From chat: when user says done, call husk_resume({token, note?}). From Watch UI: user clicks Resume, server-side handles it. Whichever fires first wins.\n\nCOOKIE TRANSFER: Pass need_cookies_back: true ONLY when the human's browser will earn cookies you need (captcha cookies, anti-bot tokens, third-party auth state). Default false — for 'approve this purchase' / 'is this the right address' / decision points, cookies aren't needed.\n\nAFTER RESUME: Your next husk_* call succeeds. Retry whatever was blocked.\n\nDO NOT: Use for routine questions — use husk_ask_human instead (doesn't pause the session).\n\nParams: session_id, reason (short, e.g. 'captcha', '2FA required', 'needs human credential'), suggested_action? (longer prose for the user), need_cookies_back? (default false), timeout_ms? (default 600000).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: { type: "string" },
+        reason: { type: "string", description: "Short label for why a human is needed. Surfaces to the user in the Watch UI banner." },
+        suggested_action: { type: "string", description: "Optional longer description of what you want the user to do." },
+        need_cookies_back: { type: "boolean", description: "When true, the handoff page shows cookie-capture options (bookmarklet, paste). Default false." },
+        timeout_ms: { type: "number", description: "How long the session stays paused before auto-resuming with timeout. Default 600000 (10 min)." },
+      },
+      required: ["session_id", "reason"],
+    },
+  },
 ];
 
 const RPC_MAP: Record<string, string> = {
@@ -328,6 +343,7 @@ const RPC_MAP: Record<string, string> = {
   husk_wait_for: "wait_for",
   husk_upload: "upload",
   husk_ask_human: "ask_human",
+  husk_handoff: "handoff",
 };
 
 const VERSION = "0.0.0";

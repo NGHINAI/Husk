@@ -361,5 +361,38 @@ class Session:
             params["timeout_ms"] = timeout_ms
         return await self._client.call("ask_human", params)
 
+    async def handoff(
+        self,
+        *,
+        reason: str,
+        suggested_action: Optional[str] = None,
+        need_cookies_back: Optional[bool] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> dict:
+        """Pause the session and hand control to the human — NON-BLOCKING.
+
+        Returns immediately with ``{pending, token, handoff_url, surface}``.
+        The session is paused server-side; all action calls return
+        ``session_paused`` until resumed. Relay the ``handoff_url`` and
+        ``surface["reason"]`` to the user so they know what to do.
+
+        :param reason: Short label for why a human is needed (e.g. "captcha",
+            "2FA required"). Shown in the Watch UI banner and handoff page.
+        :param suggested_action: Optional longer description of what the user
+            should do before resuming.
+        :param need_cookies_back: When True, the handoff page shows cookie-
+            capture options (bookmarklet, devtools paste). Default False.
+        :param timeout_ms: How long the session stays paused before auto-
+            resuming with a timeout result. Default 600000 ms (10 min).
+        """
+        params: dict = {"session_id": self._id, "reason": reason}
+        if suggested_action is not None:
+            params["suggested_action"] = suggested_action
+        if need_cookies_back is not None:
+            params["need_cookies_back"] = need_cookies_back
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+        return await self._client.call("handoff", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})
