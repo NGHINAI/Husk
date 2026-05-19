@@ -38,6 +38,17 @@ export const WATCH_HTML = `<!doctype html>
   .status.live { background: var(--ok); color: #0d1117; }
   .status.idle { background: var(--warn); color: #0d1117; }
   .status.dead { background: var(--bad); color: #fff; }
+  .status.paused { background: var(--warn); color: #0d1117; }
+  .status.question { background: var(--accent); color: #0d1117; }
+  .tab-list { display: inline-flex; gap: 6px; margin-left: 12px; }
+  .tab-chip { padding: 2px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; color: var(--dim); text-decoration: none; }
+  .tab-chip.current { color: var(--accent); border-color: var(--accent); }
+  .tab-chip:hover { color: var(--fg); }
+  .banner { padding: 12px 16px; border-radius: 4px; margin: 0 16px 16px; }
+  .banner.question { background: rgba(88, 166, 255, 0.08); border: 1px solid var(--accent); border-left: 3px solid var(--accent); }
+  .banner.handoff { background: rgba(210, 153, 34, 0.08); border: 1px solid var(--warn); border-left: 3px solid var(--warn); }
+  .banner button { margin-top: 6px; padding: 6px 12px; background: var(--accent); color: #0d1117; border: none; border-radius: 4px; cursor: pointer; font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .banner textarea { width: 100%; min-height: 60px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: var(--mono); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -47,7 +58,10 @@ export const WATCH_HTML = `<!doctype html>
   <span class="meta">events: <span id="evCount">0</span></span>
   <span class="meta">url: <span id="curUrl">—</span></span>
   <span class="status idle" id="status">disconnected</span>
+  <span id="tabList" class="tab-list"></span>
 </header>
+<div id="questionBanner" class="banner question" style="display:none"></div>
+<div id="handoffBanner" class="banner handoff" style="display:none"></div>
 <main>
   <section id="tree"><div class="meta">enter a session_id to begin streaming.</div></section>
   <aside id="log"></aside>
@@ -58,7 +72,85 @@ export const WATCH_HTML = `<!doctype html>
   const tree = $("#tree"); const log = $("#log");
   const status = $("#status"); const evCount = $("#evCount"); const curUrl = $("#curUrl");
   let es = null; let count = 0; let lastNodes = [];
+  let currentQuestion = null;
+  let currentHandoff = null;
+
   const setStatus = (s, cls) => { status.textContent = s; status.className = "status " + cls; };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  function showQuestionBanner(data) {
+    currentQuestion = data;
+    const banner = document.getElementById("questionBanner");
+    let html = '<div><strong>Agent asks:</strong> ' + escapeHtml(data.question) + '</div>';
+    if (data.options && data.options.length > 0) {
+      html += '<div style="margin-top:8px">';
+      data.options.forEach((opt, i) => {
+        html += '<button class="opt-btn" data-token="' + escapeHtml(data.token) + '" data-index="' + i + '">' + escapeHtml(opt) + '</button> ';
+      });
+      html += '</div>';
+    } else {
+      html += '<div style="margin-top:8px"><textarea id="ans-' + escapeHtml(data.token) + '" placeholder="Type your answer…"></textarea><br><button class="answer-btn" data-token="' + escapeHtml(data.token) + '">Send answer</button></div>';
+    }
+    banner.innerHTML = html;
+    banner.style.display = "block";
+    banner.querySelectorAll(".opt-btn").forEach(btn => {
+      btn.addEventListener("click", () => answerQuestion(btn.dataset.token, undefined, parseInt(btn.dataset.index, 10)));
+    });
+    banner.querySelectorAll(".answer-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const ta = document.getElementById("ans-" + btn.dataset.token);
+        const text = ta ? ta.value : "";
+        answerQuestion(btn.dataset.token, text);
+      });
+    });
+  }
+
+  function hideQuestionBanner() {
+    currentQuestion = null;
+    const b = document.getElementById("questionBanner");
+    b.style.display = "none";
+    b.innerHTML = "";
+  }
+
+  function showHandoffBanner(data) {
+    currentHandoff = data;
+    const banner = document.getElementById("handoffBanner");
+    banner.innerHTML = '<div><strong>Agent needs your help:</strong> ' + escapeHtml(data.reason) + '</div>' +
+      (data.suggested_action ? '<div style="margin-top:4px;color:var(--dim)">' + escapeHtml(data.suggested_action) + '</div>' : '') +
+      (data.handoff_url ? '<div style="margin-top:8px"><a href="' + escapeHtml(data.handoff_url) + '" target="_blank">Open handoff page →</a></div>' : '');
+    banner.style.display = "block";
+  }
+
+  function hideHandoffBanner() {
+    currentHandoff = null;
+    const b = document.getElementById("handoffBanner");
+    b.style.display = "none";
+    b.innerHTML = "";
+  }
+
+  async function answerQuestion(token, answer, index) {
+    const body = {};
+    if (answer !== undefined) body.answer = answer;
+    if (index !== undefined) body.index = index;
+    await fetch("/ask/" + encodeURIComponent(token) + "/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function renderTabList(currentSid, siblings) {
+    const list = document.getElementById("tabList");
+    if (!siblings || siblings.length === 0) { list.innerHTML = ""; return; }
+    const all = [currentSid, ...siblings];
+    list.innerHTML = all.map(id => {
+      const isCurrent = id === currentSid;
+      return '<a href="?s=' + encodeURIComponent(id) + '" class="tab-chip' + (isCurrent ? ' current' : '') + '">' + escapeHtml(id.slice(0, 8)) + '</a>';
+    }).join(" ");
+  }
 
   const renderTree = (nodes, highlight) => {
     tree.innerHTML = "";
@@ -116,6 +208,8 @@ export const WATCH_HTML = `<!doctype html>
         if (s.result && s.result.root) {
           lastNodes = flatten(s.result.root);
           renderTree(lastNodes);
+          const siblings = s.result.sibling_sessions || [];
+          renderTabList(sid, siblings);
         }
       })
       .catch(() => {});
@@ -145,6 +239,22 @@ export const WATCH_HTML = `<!doctype html>
         if (kind === "snapshot") fetchSnapshot(sessionId);
       });
     }
+    es.addEventListener("pending_question", (e) => {
+      const data = JSON.parse(e.data);
+      showQuestionBanner(data);
+      setStatus("needs answer", "question");
+    });
+    es.addEventListener("pending_handoff", (e) => {
+      const data = JSON.parse(e.data);
+      showHandoffBanner(data);
+      setStatus("paused (handoff)", "paused");
+    });
+    es.addEventListener("resolved", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.kind_resolved === "question") hideQuestionBanner();
+      if (data.kind_resolved === "handoff") hideHandoffBanner();
+      if (!currentQuestion && !currentHandoff) setStatus("live", "live");
+    });
   };
 
   $("#sessionId").addEventListener("change", (e) => connect(e.target.value.trim()));
