@@ -322,5 +322,19 @@ class Session:
             return result["text"]
         return result
 
+    async def handle_dialog(self, action: str, *, text: Optional[str] = None) -> None:
+        """Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+
+        No-op when no dialog is open. Auto-dismiss handles 99% of cases;
+        use this when you need to explicitly accept/respond (e.g. prompt dialogs).
+
+        :param action: ``"accept"`` or ``"dismiss"``.
+        :param text:   Optional response text for ``prompt`` dialogs.
+        """
+        params: dict[str, Any] = {"session_id": self._id, "action": action}
+        if text is not None:
+            params["text"] = text
+        await self._client.call("dialog", params)
+
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})

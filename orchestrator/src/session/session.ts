@@ -33,6 +33,7 @@ import type { WatchEvent } from "../watch/events.js";
 import { filterVisible } from "../snapshot/visible.js";
 import { captureScreenshot } from "../snapshot/screenshot.js";
 import { deriveApiHints } from "../snapshot/api-hints.js";
+import { DialogHandler } from "./dialog-handler.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -112,6 +113,7 @@ function normalizeConsoleLevel(t?: string): ConsoleLevel {
 export class Session {
   private lastSnapshotAt = 0;
   private lastSnapshotMode: "full" | "terse" | "visible" = "full";
+  private dialogHandler?: DialogHandler;
   /** networkIdleMs passed to waitForPageReady. Production default: 500.
    *  fromInjected sets this to 0 so unit tests don't pay the idle penalty. */
   private networkIdleMs = 500;
@@ -248,6 +250,18 @@ export class Session {
       });
     });
 
+    // Wire JS dialog auto-handler. Auto-dismisses after 100ms by default to
+    // prevent pages from deadlocking on alert/confirm/prompt/beforeunload.
+    inst.dialogHandler = new DialogHandler(
+      { send: (method, params) => cdp.send(method, params as Record<string, unknown>, sessionId) },
+      { autoDismissMs: 100 }
+    );
+    cdp.on("Page.javascriptDialogOpening", (params: unknown) => {
+      const p = params as { type: string; message: string; url: string };
+      // CDP type values: "alert", "confirm", "prompt", "beforeunload" — matches our union.
+      inst.dialogHandler?.onDialog(p as { type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string; url: string });
+    });
+
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
     }
@@ -377,6 +391,10 @@ export class Session {
 
     // M15 T1: Attach sibling session ids (tab group). Always present (empty for solo sessions).
     snap.sibling_sessions = this.getSiblings ? this.getSiblings() : [];
+
+    // M15 T2: Attach pending dialog (only when one is actually open — keeps snapshot lean).
+    const pendingDialog = this.dialogHandler?.pending();
+    if (pendingDialog) snap.dialog = pendingDialog;
 
     // M14 T8: Optionally attach base64 PNG screenshot.
     if (opts.include_image) {
@@ -1117,6 +1135,19 @@ export class Session {
         return r.result?.value;
       },
     }, c);
+  }
+
+  /**
+   * Manually accept or dismiss a pending JS dialog (alert/confirm/prompt/beforeunload).
+   * Cancels the auto-dismiss timer. No-op when no dialog is open (doesn't throw).
+   *
+   * NOTE: Auto-dismiss handles 99% of cases — this method exists for the rare
+   * case where the agent needs to accept a confirm/prompt and provide a text response.
+   * Exposed via JSON-RPC `dialog` method; NOT in the MCP tool surface.
+   */
+  async handleDialog(action: "accept" | "dismiss", text?: string): Promise<void> {
+    if (!this.dialogHandler) return;
+    await this.dialogHandler.manualHandle(action, text);
   }
 
   async close(): Promise<void> {

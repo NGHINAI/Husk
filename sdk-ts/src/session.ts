@@ -138,6 +138,15 @@ export class Session {
     return result.result ?? result.text ?? result;
   }
 
+  /**
+   * Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+   * No-op when no dialog is open. Auto-dismiss handles 99% of cases;
+   * use this when you need to explicitly accept/respond (e.g. prompt dialogs).
+   */
+  async handleDialog(action: "accept" | "dismiss", text?: string): Promise<void> {
+    await this.client.call("dialog", { session_id: this.id, action, text });
+  }
+
   async close(): Promise<void> {
     await this.client.call("close_session", { session_id: this.id });
   }

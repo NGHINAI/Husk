@@ -303,6 +303,22 @@ export const METHODS = {
     return { results };
   },
 
+  /**
+   * Handle a pending JS dialog (alert/confirm/prompt/beforeunload).
+   *
+   * Exposed via JSON-RPC only — NOT in the MCP tool surface (see mcp/src/tool-surface.ts).
+   * Auto-dismiss handles 99% of cases; this method exists for the rare case where
+   * the agent needs to explicitly accept/respond to a dialog.
+   */
+  async dialog(
+    params: { session_id: string; action: "accept" | "dismiss"; text?: string },
+    ctx: MethodContext
+  ): Promise<{ ok: true }> {
+    const session = ctx.sessions.get(params.session_id);
+    await session.handleDialog(params.action, params.text);
+    return { ok: true };
+  },
+
   async wait_for(
     params: { session_id: string } & WaitForCondition,
     ctx: MethodContext
