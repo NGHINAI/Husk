@@ -42,7 +42,8 @@ export type RejectionReason =
   | "policy_forbidden"
   | "policy_required_before"
   | "policy_domain_denied"
-  | "session_paused";
+  | "session_paused"
+  | "engine_unsupported";
 
 /**
  * Soft notice returned alongside `ok: true` when a `warn`-severity rule fires

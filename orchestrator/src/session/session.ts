@@ -607,7 +607,27 @@ export class Session {
       return envelope;
     }
     const urlBefore = this.currentUrl;
-    await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
+    try {
+      await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
+    } catch (err: unknown) {
+      if (isCdpUnsupported(err)) {
+        this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: "engine_unsupported", candidates: [] });
+        this.historyBuffer.add({ verb: "click", target_name: this.getTargetName(before, stable_id), ok: false, ts: Date.now() });
+        if (this.siteGraph) {
+          try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+        }
+        return {
+          ok: false,
+          reason: "engine_unsupported",
+          verb: "click",
+          stable_id_attempted: stable_id,
+          candidates: [],
+          snapshot_at_attempt: before,
+          message: cdpUnsupportedMessage(err),
+        };
+      }
+      throw err;
+    }
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
     const result: ActionResult = {
@@ -677,7 +697,41 @@ export class Session {
       return envelope;
     }
     const urlBefore = this.currentUrl;
-    await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
+    let typeOk = false;
+    try {
+      await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
+      typeOk = true;
+    } catch (err: unknown) {
+      if (!isCdpUnsupported(err)) throw err;
+      // CDP Input.dispatchKeyEvent refused (e.g. tel/password inputs on lightpanda).
+      // Fall back to Runtime.callFunctionOn (same technique as M8b jsFormLogin).
+      const jsOk = await typeViaJs(
+        { send: (method: string, params: unknown) => this.cdp.send(method, params as Record<string, unknown>, this.sessionId) },
+        pre.backendNodeId,
+        text,
+      );
+      if (!jsOk) {
+        this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "type", reason: "engine_unsupported", candidates: [] });
+        this.historyBuffer.add({ verb: "type", target_name: this.getTargetName(before, stable_id), ok: false, ts: Date.now() });
+        if (this.siteGraph) {
+          try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+        }
+        return {
+          ok: false,
+          reason: "engine_unsupported",
+          verb: "type",
+          stable_id_attempted: stable_id,
+          candidates: [],
+          snapshot_at_attempt: before,
+          message: cdpUnsupportedMessage(err),
+        };
+      }
+      typeOk = true;
+    }
+    if (!typeOk) {
+      // Should not reach here; safety guard.
+      return { ok: false, reason: "engine_unsupported", verb: "type", stable_id_attempted: stable_id, candidates: [], snapshot_at_attempt: before };
+    }
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
     const result: ActionResult = {
@@ -721,7 +775,27 @@ export class Session {
       return envelope;
     }
     const urlBefore = this.currentUrl;
-    await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
+    try {
+      await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
+    } catch (err: unknown) {
+      if (isCdpUnsupported(err)) {
+        this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "scroll", reason: "engine_unsupported", candidates: [] });
+        this.historyBuffer.add({ verb: "scroll", target_name: this.getTargetName(before, stable_id), ok: false, ts: Date.now() });
+        if (this.siteGraph && stable_id) {
+          try { this.siteGraph.recordFailure(new URL(this.currentUrl).hostname, stable_id); } catch { /* ignore */ }
+        }
+        return {
+          ok: false,
+          reason: "engine_unsupported",
+          verb: "scroll",
+          stable_id_attempted: stable_id,
+          candidates: [],
+          snapshot_at_attempt: before,
+          message: cdpUnsupportedMessage(err),
+        };
+      }
+      throw err;
+    }
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
     const result: ActionResult = {
@@ -980,7 +1054,25 @@ export class Session {
       return this.withSnapshot(envelope, doSnap);
     }
     const urlBefore = this.currentUrl;
-    await dispatchPress(this.cdp, this.sessionId, key);
+    try {
+      await dispatchPress(this.cdp, this.sessionId, key);
+    } catch (err: unknown) {
+      if (isCdpUnsupported(err)) {
+        this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "press_key", reason: "engine_unsupported", candidates: [] });
+        this.historyBuffer.add({ verb: "press_key", target_name: null, ok: false, ts: Date.now() });
+        const envelope: ActionResult = {
+          ok: false,
+          reason: "engine_unsupported",
+          verb: "press_key",
+          stable_id_attempted: null,
+          candidates: [],
+          snapshot_at_attempt: before,
+          message: cdpUnsupportedMessage(err),
+        };
+        return this.withSnapshot(envelope, doSnap);
+      }
+      throw err;
+    }
     await waitForMutationWindow();
     const after = await this.snapshot({ force: true });
     const result: ActionResult = {
@@ -1281,6 +1373,68 @@ export class Session {
 
 function waitForMutationWindow(): Promise<void> {
   return new Promise((r) => setTimeout(r, 500));
+}
+
+// ---------------------------------------------------------------------------
+// CDP unsupported error detection helpers (Fix 1 + Fix 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when the CDP error is an engine "unsupported method" error.
+ * Lightpanda returns code -31998 with message "UnknownMethod" for domains/methods
+ * it does not implement (e.g. Input.dispatchKeyEvent on tel/password inputs).
+ */
+function isCdpUnsupported(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const cdpErr = err as Error & { code?: number };
+  return cdpErr.code === -31998 || err.message.includes("UnknownMethod");
+}
+
+function cdpUnsupportedMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * JS-based typing fallback for fields that reject CDP Input.dispatchKeyEvent
+ * (e.g. <input type="tel">, <input type="password"> on lightpanda).
+ *
+ * Uses DOM.resolveNode to get a Runtime objectId, then Runtime.callFunctionOn
+ * to set .value and dispatch synthetic input + change events — the same
+ * approach used by the M8b jsFormLogin fallback path.
+ *
+ * Returns true on success, false when Runtime is unavailable or the call fails.
+ */
+async function typeViaJs(
+  cdp: { send: (method: string, params: unknown) => Promise<unknown> },
+  backendNodeId: number,
+  text: string,
+): Promise<boolean> {
+  try {
+    // Resolve backendNodeId → Runtime objectId.
+    const resolved = (await cdp.send("DOM.resolveNode", { backendNodeId })) as {
+      object?: { objectId?: string };
+    };
+    const objectId = resolved?.object?.objectId;
+    if (!objectId) return false;
+
+    // Call the function on the element: focus, set value, fire events.
+    const callResult = (await cdp.send("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function(value) {
+        this.focus();
+        this.value = value;
+        this.dispatchEvent(new Event("input", { bubbles: true }));
+        this.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }`,
+      arguments: [{ value: text }],
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+
+    return callResult?.result?.value === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

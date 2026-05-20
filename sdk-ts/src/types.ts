@@ -56,7 +56,8 @@ export type RejectionReason =
   | "no_match"
   | "ambiguous_intent"
   | "missing_target"
-  | "session_paused";
+  | "session_paused"
+  | "engine_unsupported";
 
 export interface RejectionEnvelope {
   ok: false;
