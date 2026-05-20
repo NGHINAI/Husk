@@ -51,7 +51,7 @@ export class EnginePool {
     this.opts = {
       minWarm: opts.minWarm ?? 4,
       maxParallel: opts.maxParallel ?? computeMaxParallel(),
-      idleShrinkMs: opts.idleShrinkMs ?? 30_000,
+      idleShrinkMs: opts.idleShrinkMs ?? 300_000,
       acquireTimeoutMs: opts.acquireTimeoutMs ?? 30_000,
       spawn: opts.spawn ?? (() => spawnLightpanda(opts.spawnOptions ?? { binary: "" })),
     };
