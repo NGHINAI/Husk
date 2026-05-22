@@ -1,6 +1,5 @@
 import type { JsonRpcClient } from "./transport.js";
 import type {
-  ActionResult,
   ActionResultWithSnapshot,
   Snapshot,
   SnapshotDiff,
@@ -10,6 +9,8 @@ import type {
   UploadResult,
   PaginateOpts,
   PaginateResult,
+  HandoffPasteResult,
+  HandoffSeamlessResult,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -162,22 +163,26 @@ export class Session {
   }
 
   /**
-   * Pause the session and hand control to the human — NON-BLOCKING.
-   * Returns immediately with {pending: true, token, handoff_url, surface}.
-   * The session is paused server-side; all action calls return session_paused until resumed.
-   * Relay handoff_url (and surface.reason + surface.suggested_action) to the user.
+   * Pause the session and hand control to the human.
+   *
+   * Two modes:
+   *   - **seamless** (default when need_cookies_back:true): spawns the user's real
+   *     Chrome at `target_url`, waits for login to complete, and imports cookies
+   *     automatically. BLOCKS until done or timeout. Returns `HandoffSeamlessResult`.
+   *   - **paste** (fallback / explicit): returns immediately with
+   *     `{pending: true, token, handoff_url, surface}`. User pastes cookies via
+   *     bookmarklet/devtools. Returns `HandoffPasteResult`.
+   *
+   * If seamless returns `{reason: "chrome_not_found"}`, re-call with mode:"paste".
    */
   async handoff(input: {
     reason: string;
     suggested_action?: string;
     need_cookies_back?: boolean;
+    mode?: "seamless" | "paste";
+    target_url?: string;
     timeout_ms?: number;
-  }): Promise<{
-    pending: true;
-    token: string;
-    handoff_url: string | null;
-    surface: { reason: string; suggested_action?: string; current_url?: string };
-  }> {
+  }): Promise<HandoffPasteResult | HandoffSeamlessResult> {
     return await this.client.call("handoff", { session_id: this.id, ...input });
   }
 
