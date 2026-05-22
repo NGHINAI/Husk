@@ -378,6 +378,38 @@ Live `/watch` viewer now shows:
 
 **21 tools total**, +3 from M14: `husk_ask_human`, `husk_handoff`, `husk_resume`. Everything else folds into existing verbs.
 
+## Seamless Session Transfer (M16)
+
+When an agent hits an auth wall (LinkedIn, Gmail, GitHub, anything with HttpOnly cookies or 2FA), `husk_handoff` can now spawn the user's real Chrome at the target URL, watch it via CDP, and pull session cookies back automatically the moment login completes.
+
+```ts
+// Agent code
+const r = await session.handoff({
+  reason: "LinkedIn login",
+  mode: "seamless",
+  need_cookies_back: true,
+  target_url: "https://linkedin.com/login",
+});
+// r === { ok: true, mode: "seamless", cookies_imported: 12, ms_paused: 47210 }
+// Session is now authenticated. Just retry whatever was blocked.
+```
+
+### How it works
+
+1. Husk locates Chrome on disk (cross-platform: macOS, Linux, Windows, Brave, Edge, Arc).
+2. Spawns Chrome at the target URL with an isolated profile + CDP debugging port.
+3. User logs in normally — captcha, 2FA, OAuth all work natively in their real Chrome.
+4. Husk detects login completion via URL change (away from `/login`, `/signin`, etc.) OR a small "I'm done" overlay button.
+5. Cookies are scoped to the target eTLD+1 (no third-party leakage) and imported into the lightpanda session.
+6. Chrome closes, profile dir is removed.
+7. The blocking `husk_handoff` tool call resolves with `{ok: true, cookies_imported, ms_paused}`.
+
+### Fallback
+
+If Chrome isn't installed, `husk_handoff({mode: "seamless"})` returns `{ok: false, reason: "chrome_not_found"}`. The agent re-calls with `mode: "paste"` for the M15 manual cookie-paste flow.
+
+MCP surface unchanged: 21 tools. Seamless is a `mode` param on existing `husk_handoff`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing
