@@ -31,6 +31,9 @@ describe("handoff RPC method", () => {
         reason: "captcha",
         suggested_action: "Solve hCaptcha then resume",
         need_cookies_back: true,
+        // Explicitly request paste mode so this M15 test is not affected by
+        // the seamless-default introduced in M16 T6.
+        mode: "paste",
         timeout_ms: 10_000,
       },
       ctx as any,

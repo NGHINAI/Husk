@@ -7,5 +7,5 @@ export type WatchEvent =
   | { kind: "navigation"; ts: number; url: string }
   | { kind: "find"; ts: number; intent: string; candidates: FindCandidate[] }
   | { kind: "pending_question"; ts: number; token: string; question: string; options?: string[] }
-  | { kind: "pending_handoff"; ts: number; token: string; reason: string; suggested_action?: string; current_url?: string; handoff_url: string | null; need_cookies_back?: boolean }
+  | { kind: "pending_handoff"; ts: number; token: string; reason: string; suggested_action?: string; current_url?: string; handoff_url: string | null; need_cookies_back?: boolean; mode?: "seamless" | "paste" }
   | { kind: "resolved"; ts: number; token: string; kind_resolved: "question" | "handoff" };
