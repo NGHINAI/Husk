@@ -367,14 +367,24 @@ class Session:
         reason: str,
         suggested_action: Optional[str] = None,
         need_cookies_back: Optional[bool] = None,
+        mode: Optional[str] = None,  # "seamless" | "paste"
+        target_url: Optional[str] = None,
         timeout_ms: Optional[int] = None,
     ) -> dict:
-        """Pause the session and hand control to the human — NON-BLOCKING.
+        """Pause the session and hand control to the human.
 
-        Returns immediately with ``{pending, token, handoff_url, surface}``.
-        The session is paused server-side; all action calls return
-        ``session_paused`` until resumed. Relay the ``handoff_url`` and
-        ``surface["reason"]`` to the user so they know what to do.
+        Two modes:
+
+        **Seamless** (default when ``need_cookies_back=True``): spawns the
+        user's real Chrome at ``target_url``, waits for login to complete,
+        and imports cookies automatically. BLOCKS until done or timeout.
+        Returns ``{ok, mode:"seamless", cookies_imported, ms_paused, reason?}``.
+        If ``reason`` is ``"chrome_not_found"``, Chrome is not installed —
+        retry with ``mode="paste"`` as the fallback.
+
+        **Paste** (fallback / explicit): returns immediately with
+        ``{pending, token, handoff_url, surface}``. The session is paused
+        server-side; all action calls return ``session_paused`` until resumed.
 
         :param reason: Short label for why a human is needed (e.g. "captcha",
             "2FA required"). Shown in the Watch UI banner and handoff page.
@@ -382,6 +392,10 @@ class Session:
             should do before resuming.
         :param need_cookies_back: When True, the handoff page shows cookie-
             capture options (bookmarklet, devtools paste). Default False.
+        :param mode: ``"seamless"`` or ``"paste"``. Defaults to seamless when
+            ``need_cookies_back`` is True and Husk is on 127.0.0.1.
+        :param target_url: URL the user's Chrome opens to in seamless mode.
+            Defaults to the session's current URL.
         :param timeout_ms: How long the session stays paused before auto-
             resuming with a timeout result. Default 600000 ms (10 min).
         """
@@ -390,6 +404,10 @@ class Session:
             params["suggested_action"] = suggested_action
         if need_cookies_back is not None:
             params["need_cookies_back"] = need_cookies_back
+        if mode is not None:
+            params["mode"] = mode
+        if target_url is not None:
+            params["target_url"] = target_url
         if timeout_ms is not None:
             params["timeout_ms"] = timeout_ms
         return await self._client.call("handoff", params)

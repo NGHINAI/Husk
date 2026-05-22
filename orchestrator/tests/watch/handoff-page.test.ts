@@ -20,6 +20,17 @@ describe("HANDOFF_HTML", () => {
     expect(HANDOFF_HTML).toContain("resumeNoCookies");
     expect(HANDOFF_HTML).toMatch(/<textarea/);
   });
+
+  it("has primary CTA button with target URL as href", () => {
+    expect(HANDOFF_HTML).toContain("class=\"primary-open\"");
+    expect(HANDOFF_HTML).toContain("primary-open-label");
+    expect(HANDOFF_HTML).toContain("① Open in your browser");
+  });
+
+  it("includes Step 2 section with HttpOnly cookie note", () => {
+    expect(HANDOFF_HTML).toContain("② After you've logged in");
+    expect(HANDOFF_HTML).toContain("HttpOnly cookies");
+  });
 });
 
 describe("bookmarkletFor", () => {

@@ -222,3 +222,23 @@ export interface PaginateResult<T = unknown> {
   total_pages: number;
   stopped_reason: StoppedReason;
 }
+
+// ----- husk_handoff return types -----
+
+export interface HandoffPasteResult {
+  pending: true;
+  token: string;
+  handoff_url: string | null;
+  surface: { reason: string; suggested_action?: string; current_url?: string };
+  mode?: "paste";
+}
+
+export interface HandoffSeamlessResult {
+  ok: boolean;
+  mode: "seamless";
+  cookies_imported: number;
+  ms_paused: number;
+  reason?: "timeout" | "chrome_not_found";
+}
+
+export type HandoffResult = HandoffPasteResult | HandoffSeamlessResult;

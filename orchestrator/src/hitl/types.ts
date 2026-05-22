@@ -35,7 +35,7 @@ export interface ResumeCookie {
 
 export interface ResolvedHandoff {
   resumed: boolean;
-  reason?: "timeout";
+  reason?: "timeout" | "chrome_not_found";
   cookies_imported?: number;
   cookies?: ResumeCookie[];  // raw cookies — Session.importCookies uses these
   ms_paused: number;

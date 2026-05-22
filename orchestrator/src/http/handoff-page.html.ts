@@ -13,16 +13,18 @@ export const HANDOFF_HTML = `<!doctype html>
   * { box-sizing: border-box; }
   body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 13px; line-height: 1.6; max-width: 720px; margin-left: auto; margin-right: auto; }
   h1 { font-size: 16px; color: var(--accent); margin: 0 0 16px; }
-  .reason { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--warn); padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+  .reason { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--warn); padding: 12px 16px; border-radius: 4px; margin-bottom: 24px; }
   .reason .label { color: var(--warn); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; font-weight: 600; }
   .suggested { color: var(--dim); margin-top: 6px; }
-  .url { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px; border-radius: 4px; word-break: break-all; margin-bottom: 16px; }
-  .url a { color: var(--accent); text-decoration: none; }
-  .url a:hover { text-decoration: underline; }
+  .primary-open { display: block; padding: 16px 20px; background: var(--accent); color: #0d1117; border-radius: 6px; text-decoration: none; margin: 0 0 32px 0; transition: filter 0.15s; }
+  .primary-open:hover { filter: brightness(1.1); }
+  .primary-open-label { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+  .primary-open-url { font-size: 12px; opacity: 0.85; margin-top: 4px; word-break: break-all; }
+  .step-section { opacity: 0.85; }
   h2 { font-size: 13px; color: var(--fg); margin: 24px 0 8px; }
   .step { background: var(--panel); border: 1px solid var(--border); padding: 12px; border-radius: 4px; margin-bottom: 10px; }
-  .step .num { color: var(--accent); font-weight: 600; margin-right: 8px; }
-  .bookmarklet { display: inline-block; padding: 6px 12px; background: var(--accent); color: #0d1117; border-radius: 4px; text-decoration: none; font-weight: 600; cursor: grab; }
+  .step .num { font-size: 16px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; background: var(--accent); color: #0d1117; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
+  .bookmarklet { display: inline-block; padding: 6px 12px; background: var(--ok); color: #0d1117; border-radius: 4px; text-decoration: none; font-weight: 600; cursor: grab; }
   textarea { width: 100%; min-height: 80px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: var(--mono); font-size: 12px; }
   button { background: var(--ok); color: #0d1117; border: none; padding: 10px 20px; border-radius: 4px; font-family: var(--mono); font-weight: 600; cursor: pointer; font-size: 13px; }
   button:hover { filter: brightness(1.1); }
@@ -41,31 +43,37 @@ export const HANDOFF_HTML = `<!doctype html>
   <div class="suggested">__SUGGESTED__</div>
 </div>
 
-<h2>Target URL</h2>
-<div class="url"><a href="__CURRENT_URL__" target="_blank" rel="noopener">__CURRENT_URL__</a></div>
-<div class="meta">Open this URL in a new tab, complete what's needed, then come back here to resume the agent.</div>
+<a class="primary-open" href="__CURRENT_URL__" target="_blank" rel="noopener">
+  <div class="primary-open-label">① Open in your browser</div>
+  <div class="primary-open-url">__CURRENT_URL__</div>
+</a>
 
-<h2>Need cookies back? Three ways</h2>
+<div class="step-section">
+  <h2>② After you've logged in / completed the action...</h2>
 
-<div class="step">
-  <span class="num">1</span><strong>Bookmarklet (recommended)</strong> — drag this to your bookmarks bar:
-  <br><br>
-  <a class="bookmarklet" href='__BOOKMARKLET__'>Send cookies to Husk</a>
-  <br><br>
-  <span class="meta">Then: open the target URL, solve whatever you need, click the bookmarklet on that page. It POSTs document.cookie back to Husk and resumes the agent automatically.</span>
-</div>
+  <div class="step">
+    <span class="num">A</span><strong>Bookmarklet (recommended)</strong> — drag this to your bookmarks bar:
+    <br><br>
+    <a class="bookmarklet" href='__BOOKMARKLET__'>Send cookies to Husk</a>
+    <br><br>
+    <span class="meta">Then: click the bookmarklet on the target site's tab. It POSTs document.cookie back to Husk and resumes the agent automatically.</span>
+  </div>
 
-<div class="step">
-  <span class="num">2</span><strong>Paste from devtools</strong>:
-  <textarea id="paste" placeholder="Paste your cookies here (one per line as name=value, or the full document.cookie string)"></textarea>
-  <br><br>
-  <button onclick="resumeWithPaste()">Resume with pasted cookies</button>
-</div>
+  <div class="step">
+    <span class="num">B</span><strong>Paste from devtools</strong> (for HttpOnly cookies):
+    <br>
+    <textarea id="paste" placeholder="Paste cookies here AFTER logging in (open devtools → Application → Cookies → select all → copy)"></textarea>
+    <br><br>
+    <button onclick="resumeWithPaste()">Send cookies back & resume agent</button>
+    <br>
+    <span class="meta"><i>Use this when the site has HttpOnly cookies (LinkedIn, GitHub, Gmail) — the bookmarklet won't work for those.</i></span>
+  </div>
 
-<div class="step">
-  <span class="num">3</span><strong>No cookies needed</strong> — just click below to resume the agent.
-  <br><br>
-  <button class="secondary" onclick="resumeNoCookies()">Resume agent (no cookie transfer)</button>
+  <div class="step">
+    <span class="num">C</span><strong>No cookies needed</strong> — just click below to resume the agent.
+    <br><br>
+    <button class="secondary" onclick="resumeNoCookies()">Resume agent (no cookie transfer)</button>
+  </div>
 </div>
 
 <div id="status"></div>

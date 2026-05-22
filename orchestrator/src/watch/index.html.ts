@@ -118,9 +118,15 @@ export const WATCH_HTML = `<!doctype html>
   function showHandoffBanner(data) {
     currentHandoff = data;
     const banner = document.getElementById("handoffBanner");
-    banner.innerHTML = '<div><strong>Agent needs your help:</strong> ' + escapeHtml(data.reason) + '</div>' +
-      (data.suggested_action ? '<div style="margin-top:4px;color:var(--dim)">' + escapeHtml(data.suggested_action) + '</div>' : '') +
-      (data.handoff_url ? '<div style="margin-top:8px"><a href="' + escapeHtml(data.handoff_url) + '" target="_blank">Open handoff page →</a></div>' : '');
+    if (data.mode === "seamless") {
+      banner.innerHTML = '<div><strong>🌐 Waiting in your Chrome:</strong> ' + escapeHtml(data.reason) + '</div>' +
+        '<div style="margin-top:6px;color:var(--dim)">Husk launched a Chrome window at <code>' + escapeHtml(data.current_url || '') + '</code>. Log in there normally — Husk will resume the agent automatically once you\'re past the login.</div>' +
+        (data.suggested_action ? '<div style="margin-top:6px;color:var(--dim);font-style:italic">' + escapeHtml(data.suggested_action) + '</div>' : '');
+    } else {
+      banner.innerHTML = '<div><strong>Agent needs your help:</strong> ' + escapeHtml(data.reason) + '</div>' +
+        (data.suggested_action ? '<div style="margin-top:4px;color:var(--dim)">' + escapeHtml(data.suggested_action) + '</div>' : '') +
+        (data.handoff_url ? '<div style="margin-top:8px"><a href="' + escapeHtml(data.handoff_url) + '" target="_blank">Open handoff page →</a></div>' : '');
+    }
     banner.style.display = "block";
   }
 
@@ -247,7 +253,11 @@ export const WATCH_HTML = `<!doctype html>
     es.addEventListener("pending_handoff", (e) => {
       const data = JSON.parse(e.data);
       showHandoffBanner(data);
-      setStatus("paused (handoff)", "paused");
+      if (data.mode === "seamless") {
+        setStatus("waiting in Chrome (seamless)", "paused");
+      } else {
+        setStatus("paused (handoff)", "paused");
+      }
     });
     es.addEventListener("resolved", (e) => {
       const data = JSON.parse(e.data);

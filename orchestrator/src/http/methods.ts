@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SessionManager } from "../session/manager.js";
 import type { Snapshot, SnapshotDiff } from "../snapshot/types.js";
 import { InvalidUrlError } from "./errors.js";
@@ -30,6 +31,11 @@ export interface MethodContext {
   humanIO?: HumanIOBus;
   /** Watch event bus — needed so ask_human can emit pending_question events. */
   watchBus?: WatchBus;
+  /**
+   * Manual-done triggers for in-flight seamless handoffs, keyed by token.
+   * Shared between methods.ts (writer) and hitl-routes.ts (caller).
+   */
+  seamlessTriggers?: Map<string, () => void>;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -359,30 +365,168 @@ export const METHODS = {
    * Either chat reply or Watch UI button click resolves the token.
    */
   /**
-   * Pause the session and ask the human to take over (non-blocking).
-   * Returns immediately with {pending: true, token, handoff_url, surface}.
-   * The session is paused server-side; any further action calls return
-   * {ok:false, reason:'session_paused'} until resumed.
+   * Pause the session and hand off to the human.
+   *
+   * Two modes:
+   *
+   * mode:"seamless" (BLOCKING) — Spawns Chrome at target_url, waits for the
+   *   user to log in (URL change or overlay button), syncs cookies back, then
+   *   returns the final result inline.  Only engages when host==="127.0.0.1".
+   *   Falls back to paste mode if Chrome is not found or host is remote.
+   *   Returns: { ok, mode:"seamless", cookies_imported, ms_paused, reason? }
+   *
+   * mode:"paste" (NON-BLOCKING, M15 default) — Returns immediately with
+   *   {pending: true, token, handoff_url, surface}. The agent polls or accepts
+   *   a Watch UI resolve to continue.
+   *
+   * Default mode: "seamless" when need_cookies_back:true + host==="127.0.0.1";
+   * "paste" otherwise.
    */
   async handoff(
-    params: {
-      session_id: string;
-      reason: string;
-      suggested_action?: string;
-      need_cookies_back?: boolean;
-      timeout_ms?: number;
-    },
-    ctx: MethodContext,
+    ctxOrParams:
+      | MethodContext
+      | {
+          session_id: string;
+          reason: string;
+          suggested_action?: string;
+          need_cookies_back?: boolean;
+          mode?: "seamless" | "paste";
+          target_url?: string;
+          timeout_ms?: number;
+        },
+    paramsOrCtx:
+      | {
+          session_id: string;
+          reason: string;
+          suggested_action?: string;
+          need_cookies_back?: boolean;
+          mode?: "seamless" | "paste";
+          target_url?: string;
+          timeout_ms?: number;
+        }
+      | MethodContext,
   ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasHumanIOOrSessions = (v: any): v is MethodContext =>
+      v != null && typeof v === "object" && ("humanIO" in v || "sessions" in v);
+    const ctx = hasHumanIOOrSessions(ctxOrParams)
+      ? ctxOrParams
+      : (paramsOrCtx as MethodContext);
+    const params = hasHumanIOOrSessions(ctxOrParams)
+      ? (paramsOrCtx as {
+          session_id: string;
+          reason: string;
+          suggested_action?: string;
+          need_cookies_back?: boolean;
+          mode?: "seamless" | "paste";
+          target_url?: string;
+          timeout_ms?: number;
+        })
+      : (ctxOrParams as {
+          session_id: string;
+          reason: string;
+          suggested_action?: string;
+          need_cookies_back?: boolean;
+          mode?: "seamless" | "paste";
+          target_url?: string;
+          timeout_ms?: number;
+        });
+
     if (!params.reason?.trim()) {
       throw new Error("handoff requires a non-empty reason");
     }
-    if (!ctx.humanIO) {
-      throw new Error("handoff is not available: humanIO bus not initialised");
-    }
+
     const session = ctx.sessions.get(params.session_id);
     const current_url = session.getCurrentUrl?.() ?? null;
     const timeoutMs = params.timeout_ms ?? 600_000;
+
+    // Decide effective mode: seamless only on loopback, never for explicit "paste"
+    const wantsSeamless =
+      params.mode === "seamless" ||
+      (params.mode === undefined && params.need_cookies_back === true);
+    const isLoopback = ctx.host === "127.0.0.1";
+
+    if (wantsSeamless && isLoopback) {
+      // ── SEAMLESS (BLOCKING) ──────────────────────────────────────────────
+      const target_url = params.target_url ?? current_url;
+      if (!target_url) {
+        throw new Error(
+          "seamless handoff requires target_url or a current session URL",
+        );
+      }
+
+      const token = randomUUID();
+      session.pause({ token, handoff_url: null });
+
+      // Emit pending_handoff to Watch UI (with mode:"seamless" indicator)
+      ctx.watchBus?.emit(params.session_id, {
+        kind: "pending_handoff",
+        ts: Date.now(),
+        token,
+        reason: params.reason,
+        suggested_action: params.suggested_action,
+        current_url: target_url,
+        handoff_url: null,
+        need_cookies_back: true,
+        mode: "seamless",
+      });
+
+      // Ensure the triggers map exists
+      ctx.seamlessTriggers ??= new Map();
+
+      // Lazy-import the handoff module so tests can vi.mock it
+      const {
+        findChrome,
+        spawnChrome,
+        connectToChrome,
+        createHandoffProfileDir,
+        runSeamlessHandoff,
+      } = await import("../handoff/index.js");
+
+      const { rm } = await import("node:fs/promises");
+
+      const result = await runSeamlessHandoff({
+        session,
+        targetUrl: target_url,
+        timeoutMs,
+        token,
+        huskPort: ctx.portRef!.value,
+        findChrome,
+        spawnChrome,
+        connectToChrome,
+        createProfileDir: createHandoffProfileDir,
+        cleanupProfileDir: async (dir) => {
+          await rm(dir, { recursive: true, force: true }).catch(() => {});
+        },
+        onManualDoneHandle: (trigger) => {
+          ctx.seamlessTriggers!.set(token, trigger);
+        },
+      });
+
+      ctx.seamlessTriggers.delete(token);
+      session.resume();
+
+      // Emit resolved event so Watch UI clears the handoff widget
+      ctx.watchBus?.emit(params.session_id, {
+        kind: "resolved",
+        ts: Date.now(),
+        token,
+        kind_resolved: "handoff",
+      });
+
+      return {
+        ok: result.resumed,
+        mode: "seamless" as const,
+        cookies_imported: result.cookies_imported,
+        ms_paused: result.ms_paused,
+        ...(result.reason ? { reason: result.reason } : {}),
+      };
+    }
+
+    // ── PASTE (NON-BLOCKING, M15 behavior) ─────────────────────────────────
+    if (!ctx.humanIO) {
+      throw new Error("handoff is not available: humanIO bus not initialised");
+    }
 
     const { token, promise } = ctx.humanIO.startHandoff(
       params.session_id,
@@ -413,6 +557,7 @@ export const METHODS = {
       current_url: current_url ?? undefined,
       handoff_url,
       need_cookies_back: params.need_cookies_back,
+      mode: "paste",
     });
 
     // Fire-and-forget: when the bus resolves (via Watch UI POST or via husk_resume in T7),

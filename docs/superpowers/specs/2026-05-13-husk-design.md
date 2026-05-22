@@ -1125,6 +1125,72 @@ Items deferred to implementation or revisit:
 | **Landmark** | ARIA landmark role (`main`, `navigation`, `search`, `form`, `dialog`, `banner`, `contentinfo`, `region`, `complementary`). Structural anchor used in stable-ID computation. |
 | **Lightpanda** | The upstream open-source browser engine (Zig + V8) we fork. AGPL v3-licensed. |
 
+### 5.11 Seamless Session Transfer (M16 — shipped 2026-05-22)
+
+#### Motivation
+
+M15's `husk_handoff` (paste mode) required the user to capture cookies manually via bookmarklet or devtools paste. For real auth flows on modern sites (LinkedIn, Gmail, GitHub — anything with HttpOnly cookies, captcha, or 2FA), that's a clunky multi-step process. M16 makes handoff transparent: Husk launches the user's REAL Chrome at the target URL, watches it via CDP, and pulls cookies back automatically the moment the user navigates past the login page. From the agent's side it's a single blocking tool call; from the user's side they just log in in their normal browser.
+
+**MCP surface unchanged: 21 tools.** Seamless is a `mode` param on existing `husk_handoff`.
+
+#### Seamless flow
+
+1. Agent calls `husk_handoff({mode: "seamless", target_url, need_cookies_back: true, reason})`.
+2. Husk pauses the lightpanda session, mints a token.
+3. Husk locates a Chrome-family browser on disk (`findChrome()` searches Chrome, Chromium, Brave, Edge, Arc across macOS/Linux/Windows).
+4. Husk creates an isolated profile dir (`~/.husk/handoff-profiles/<token>`) — never reuses the user's normal profile.
+5. Husk spawns the browser: `chrome --remote-debugging-port=<free> --user-data-dir=<profile> <target_url>`.
+6. Husk connects to that Chrome's CDP and injects an overlay button ("✓ I'm done") as a fallback signal.
+7. Husk subscribes to `Page.frameNavigated` events on the main frame.
+8. **User logs in normally** in their real Chrome — captcha, 2FA, OAuth consent all work natively.
+9. On URL change away from the login path (or button click), Husk:
+   a. Calls `Network.getAllCookies` on Chrome.
+   b. Scopes cookies to the target eTLD+1 (drops third-party trackers).
+   c. Imports scoped cookies into the lightpanda session via `Network.setCookies`.
+   d. Closes Chrome, removes the profile dir.
+10. The blocking `husk_handoff` call returns `{ok: true, mode: "seamless", cookies_imported, ms_paused}`.
+11. Agent's next action succeeds with the new authenticated state.
+
+#### Completion detection
+
+**Primary signal: URL pattern.** `detectCompletion(initial_url, observed_url)` returns true when the observed URL is on the same domain (or its subdomains) as initial AND is NOT on a login-y path. Login patterns: `/login`, `/signin`, `/sign-in`, `/auth`, `/oauth`, `/2fa`, `/challenge`, `/verify`, `/checkpoint`. OAuth bounces to third-party domains don't trigger — Husk waits for the redirect back to target.
+
+**Fallback signal: overlay button.** A green "✓ I'm done — return to agent" button is injected via `Page.addScriptToEvaluateOnNewDocument`. Clicking it POSTs `/handoff/:token/seamless-done` and resolves the handoff manually. Used for SPA logins that don't visibly change URL.
+
+**Timeout.** Default 10 minutes. After timeout, paused session resumes; tool returns `{ok: false, reason: "timeout"}`.
+
+#### Cookie scoping
+
+Only cookies whose `domain` matches the target URL's eTLD+1 (or its subdomains) are imported. For `linkedin.com`:
+- ✓ `.linkedin.com`, `www.linkedin.com`, `accounts.linkedin.com`
+- ✗ `google.com`, `facebook.com`, `doubleclick.net`, `linkedin-fake.com`
+
+This prevents third-party tracker cookies (which Chrome accumulates during normal browsing) from leaking into the agent's session.
+
+#### Decisions
+
+**Decision U — Seamless is the default for `need_cookies_back: true` on 127.0.0.1.** Paste mode remains the fallback for headless environments, non-localhost binds, or when Chrome isn't installed. Falls back to paste with `reason: "chrome_not_found"` so the agent can re-call with explicit `mode: "paste"`.
+
+**Decision V — Per-handoff Chrome profile.** Husk never reuses the user's normal Chrome profile. Each handoff gets a fresh `~/.husk/handoff-profiles/<token>` directory, deleted on completion. Avoids cross-contamination, avoids accidentally signing the user out of their normal browser, and keeps cookie state isolated.
+
+**Decision W — Blocking tool call for seamless.** Paste mode is non-blocking (returns immediately with a token). Seamless is blocking — the tool call doesn't return until completion or timeout. MCP supports multi-minute calls; Claude / Cursor / Continue all tolerate. The blocking model is what makes the UX work: agent waits, user logs in, agent resumes — no polling, no resume call.
+
+#### MCP surface
+
+**21 tools, unchanged from M15.** Seamless is `mode: "seamless"` on existing `husk_handoff`. Return shape differs from paste mode:
+
+| Mode | Behavior | Return shape |
+|---|---|---|
+| `paste` | Non-blocking | `{pending: true, token, handoff_url, surface}` |
+| `seamless` | Blocking | `{ok, mode: "seamless", cookies_imported, ms_paused, reason?}` |
+
+#### Limitations
+
+- Requires Chrome / Chromium / Brave / Edge / Arc installed. Falls back to paste mode if none found.
+- Per-handoff profile means the user signs in once per handoff (no persistent profile). For repeated workflows against the same site, this is a trade-off — could be addressed in a future milestone with named handoff profiles.
+- eTLD+1 detection uses last-2-parts heuristic, not the Public Suffix List. `example.co.uk` is treated as `co.uk`. Acceptable for v1; PSL integration is a future polish.
+- HTTP-only routes for `/handoff/:token` and `/seamless-done` are gated to `host === "127.0.0.1"`. Remote binds use paste mode only.
+
 ---
 
 *End of design document.*

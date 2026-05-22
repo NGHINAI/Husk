@@ -287,6 +287,7 @@ integrationOrSkip("M15 HITL + multi-tab (lightpanda end-to-end)", () => {
         reason: "test_block_captcha",
         suggested_action: "Solve and then resume",
         need_cookies_back: true,
+        mode: "paste",
         timeout_ms: 30_000,
       })) as {
         pending: boolean;

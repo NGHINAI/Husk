@@ -49,6 +49,9 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   // We resolve boundPort after the server starts; for create_session watch_url
   // we capture a reference cell updated once the port is known.
   const portRef = { value: opts.port };
+  // Shared seamless trigger map — written by the handoff method, read by the
+  // /handoff/:token/seamless-done HTTP route. Both get the same Map instance.
+  const seamlessTriggers = new Map<string, () => void>();
   const ctx: MethodContext = {
     sessions: opts.sessions,
     version: opts.version,
@@ -58,6 +61,7 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
     portRef,
     humanIO: opts.humanIO,
     watchBus: opts.watchBus,
+    seamlessTriggers,
   };
 
   app.post("/v1/jsonrpc", async (c) => {
@@ -112,7 +116,13 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
 
   // HITL answer routes — only registered when loopback + both buses are present.
   if (opts.host === "127.0.0.1" && opts.humanIO) {
-    registerHitlRoutes(app, { humanIO: opts.humanIO, watchBus: opts.watchBus, host: opts.host, portRef });
+    registerHitlRoutes(app, {
+      humanIO: opts.humanIO,
+      watchBus: opts.watchBus,
+      host: opts.host,
+      portRef,
+      seamlessTriggers,
+    });
   }
 
   const server = await new Promise<ServerType>((resolve) => {

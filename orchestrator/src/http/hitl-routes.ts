@@ -8,6 +8,12 @@ export interface HitlRoutesContext {
   watchBus?: WatchBus;
   host?: string;
   portRef?: { value: number };
+  /**
+   * Manual-done triggers for in-flight seamless handoffs, keyed by token.
+   * Shared with MethodContext so POST /handoff/:token/seamless-done can
+   * fire the trigger that was registered by runSeamlessHandoff.
+   */
+  seamlessTriggers?: Map<string, () => void>;
 }
 
 /**
@@ -84,6 +90,25 @@ export function registerHitlRoutes(app: Hono, ctx: HitlRoutesContext): void {
       : undefined;
     const note = typeof body.note === "string" ? body.note : undefined;
     ctx.humanIO.resumeHandoff(token, { cookies, note });
+    return c.json({ ok: true });
+  });
+
+  /**
+   * POST /handoff/:token/seamless-done
+   *
+   * Fires the manual-done trigger registered by runSeamlessHandoff for the
+   * given token. Called by the Chrome overlay button (injected by T3) when
+   * the user clicks "Done — return to Husk". This signals the seamless flow
+   * to finalize immediately (cookie sync → resume) instead of waiting for a
+   * navigation or timeout.
+   */
+  app.post("/handoff/:token/seamless-done", (c) => {
+    const token = c.req.param("token");
+    const trigger = ctx.seamlessTriggers?.get(token);
+    if (!trigger) {
+      return c.json({ ok: false, error: "unknown_or_expired_token" }, 404);
+    }
+    trigger();
     return c.json({ ok: true });
   });
 }
