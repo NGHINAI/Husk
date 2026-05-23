@@ -413,8 +413,24 @@ export const METHODS = {
           };
         }
 
+        // NEW: Swap to Chrome before verifying — the session's current engine
+        // (likely lightpanda) is the one that bot-blocked us in the first place;
+        // verifying on the same engine would re-trigger the same render failure.
+        // Only attempt when cookies actually came back (a real login occurred) and
+        // the session is still on lightpanda.
+        if (handoff.cookies_imported > 0 && ctx.chromePool && session.currentEngine === "lightpanda") {
+          const { fallbackToChrome } = await import("../engine/fallback.js");
+          try {
+            await fallbackToChrome(session as any, ctx.chromePool, params.session_id);
+          } catch {
+            // Best-effort — if fallback fails we still try to verify on lightpanda;
+            // worst case we report ok:false and the agent can retry
+          }
+        }
+
         // Verify we're no longer on a login path after the handoff.
         const { LOGIN_URL_PATTERNS } = await import("../auth/bot-block-detector.js");
+        await session.goto(verdict.login_url, {});
         const postSnap = await session.snapshot({ maxAgeMs: 0 });
         const stillOnLogin = LOGIN_URL_PATTERNS.some((re) => re.test(postSnap.url ?? ""));
 
@@ -423,6 +439,7 @@ export const METHODS = {
             ok: false as const,
             reason: "login_verification_failed" as const,
             escalated_via: "seamless_handoff" as const,
+            engine_after: session.currentEngine,
             cookies_imported: handoff.cookies_imported,
             ms_paused: handoff.ms_paused,
             escalation_reasons: verdict.reasons,
@@ -432,6 +449,7 @@ export const METHODS = {
         return {
           ok: true as const,
           escalated_via: "seamless_handoff" as const,
+          engine_after: session.currentEngine,
           cookies_imported: handoff.cookies_imported,
           ms_paused: handoff.ms_paused,
           escalation_reasons: verdict.reasons,

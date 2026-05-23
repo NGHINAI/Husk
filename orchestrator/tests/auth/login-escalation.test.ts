@@ -10,7 +10,7 @@
  * All Chrome/handoff I/O is mocked — no real browser spawned.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { METHODS } from "../../src/http/methods.js";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +25,14 @@ vi.mock("../../src/handoff/index.js", async () => ({
     opts.onManualDoneHandle?.(() => {});
     return { resumed: true, cookies_imported: 8, ms_paused: 3500 };
   }),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock the fallback module (no real engine swap)
+// ---------------------------------------------------------------------------
+const mockFallbackToChrome = vi.fn();
+vi.mock("../../src/engine/fallback.js", async () => ({
+  fallbackToChrome: (...args: any[]) => mockFallbackToChrome(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -102,18 +110,31 @@ function dashboardSnap() {
  * Build a minimal session stub. The `login` method handler calls:
  *   session.login(...)       — automated attempt
  *   session.snapshot(...)    — fresh snapshot after failure (bot-block detection)
+ *   session.goto(...)        — re-navigate after handoff (post-patch)
  *   session.snapshot(...)    — post-handoff verification
+ *
+ * `currentEngine` is set to "lightpanda" by default (matches real session init).
+ * Tests that mock fallbackToChrome to succeed should mutate this field to "chrome"
+ * inside their fallback mock to simulate the engine swap.
  */
 function makeSession(opts: {
   loginResult: { ok: boolean; reason?: string; url_before?: string; url_after?: string };
   snapshots: object[];
+  currentEngine?: "lightpanda" | "chrome";
 }) {
   let snapIdx = 0;
-  return {
+  const session = {
     login: vi.fn().mockResolvedValue({ ...opts.loginResult, snapshot: undefined }),
     snapshot: vi.fn().mockImplementation(async () => opts.snapshots[Math.min(snapIdx++, opts.snapshots.length - 1)]),
     importCookies: vi.fn().mockResolvedValue(8),
+    goto: vi.fn().mockResolvedValue({ ok: true }),
+    getCurrentUrl: vi.fn().mockReturnValue("https://www.linkedin.com/login"),
+    exportCookies: vi.fn().mockResolvedValue([]),
+    releaseEngine: vi.fn().mockResolvedValue(undefined),
+    swapEngine: vi.fn().mockResolvedValue(undefined),
+    currentEngine: opts.currentEngine ?? "lightpanda" as "lightpanda" | "chrome",
   };
+  return session;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +152,23 @@ function makeCtx(session: object, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Reset per-test mocks
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  // Reset call count and set default behaviour: fallbackToChrome succeeds.
+  // Individual tests override this as needed.
+  mockFallbackToChrome.mockReset();
+  mockFallbackToChrome.mockResolvedValue({
+    ok: true,
+    new_engine: "chrome",
+    fellback_from: "lightpanda",
+    cookies_transferred: 8,
+    ms_elapsed: 120,
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -284,5 +322,96 @@ describe("login method — Mode A credential lookup (profile+key)", () => {
     expect(r.ok).toBe(false);
     expect((r as any).reason).toBe("credential_not_found");
     expect(session.snapshot).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New tests: post-handoff Chrome fallback (the LinkedIn verification fix)
+// ---------------------------------------------------------------------------
+
+describe("login method — post-handoff Chrome fallback before verification", () => {
+  it("after handoff brings cookies back, swaps engine to Chrome before verifying", async () => {
+    // Session starts on lightpanda; fallbackToChrome will flip currentEngine to "chrome"
+    const session = makeSession({
+      loginResult: { ok: false, reason: "login_form_not_found" },
+      snapshots: [
+        botBlockSnap(),      // snap 0: bot-block detection
+        dashboardSnap(),     // snap 1: post-goto snapshot (feed — off login path)
+      ],
+    });
+
+    // Simulate fallbackToChrome mutating session.currentEngine (as the real impl does via swapEngine)
+    mockFallbackToChrome.mockImplementation(async (sess: any) => {
+      sess.currentEngine = "chrome";
+      return { ok: true, new_engine: "chrome", fellback_from: "lightpanda", cookies_transferred: 8, ms_elapsed: 120 };
+    });
+
+    const ctx = makeCtx(session);
+    const callOrder: string[] = [];
+    mockFallbackToChrome.mockImplementation(async (sess: any) => {
+      callOrder.push("fallback");
+      sess.currentEngine = "chrome";
+      return { ok: true, new_engine: "chrome", fellback_from: "lightpanda", cookies_transferred: 8, ms_elapsed: 120 };
+    });
+    session.goto.mockImplementation(async () => { callOrder.push("goto"); return { ok: true }; });
+
+    const r = await METHODS.login({ session_id: "s1", username: "user", password: "pass" }, ctx as any);
+
+    expect(r.ok).toBe(true);
+    expect((r as any).escalated_via).toBe("seamless_handoff");
+    expect((r as any).engine_after).toBe("chrome");
+    expect((r as any).url_after).toBe("https://www.linkedin.com/feed");
+
+    // Verify ordering: fallback MUST happen before goto
+    const fallbackIdx = callOrder.indexOf("fallback");
+    const gotoIdx = callOrder.indexOf("goto");
+    expect(fallbackIdx).toBeGreaterThanOrEqual(0);
+    expect(gotoIdx).toBeGreaterThan(fallbackIdx);
+    expect(mockFallbackToChrome).toHaveBeenCalledTimes(1);
+  });
+
+  it("if fallbackToChrome throws, still attempts verification on lightpanda (best effort)", async () => {
+    mockFallbackToChrome.mockRejectedValue(new Error("pool_exhausted"));
+
+    const session = makeSession({
+      loginResult: { ok: false, reason: "login_form_not_found" },
+      snapshots: [
+        botBlockSnap(),   // snap 0: bot-block detection
+        dashboardSnap(),  // snap 1: post-goto snapshot (verification still runs)
+      ],
+    });
+
+    const ctx = makeCtx(session);
+
+    // Should not throw — best-effort; verification still runs on lightpanda
+    const r = await METHODS.login({ session_id: "s1", username: "user", password: "pass" }, ctx as any);
+
+    expect(r.ok).toBe(true);
+    expect((r as any).escalated_via).toBe("seamless_handoff");
+    // engine_after remains "lightpanda" since fallback failed
+    expect((r as any).engine_after).toBe("lightpanda");
+    // goto + snapshot still ran (verification happened despite fallback failure)
+    expect(session.goto).toHaveBeenCalledTimes(1);
+    expect(session.snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not call fallbackToChrome when chromePool is absent (graceful degrade)", async () => {
+    const session = makeSession({
+      loginResult: { ok: false, reason: "login_form_not_found" },
+      snapshots: [
+        botBlockSnap(),   // snap 0: bot-block detection
+        dashboardSnap(),  // snap 1: post-goto verification
+      ],
+    });
+
+    // No chromePool in ctx — escalation must still work, just without the swap
+    const ctx = makeCtx(session, { chromePool: undefined });
+
+    // chromePool absent → escalation guard at the top is also skipped,
+    // so the handoff never fires and we get the original login failure back.
+    const r = await METHODS.login({ session_id: "s1", username: "user", password: "pass" }, ctx as any);
+
+    expect((r as any).escalated_via).toBeUndefined();
+    expect(mockFallbackToChrome).not.toHaveBeenCalled();
   });
 });
