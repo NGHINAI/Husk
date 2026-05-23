@@ -26,6 +26,7 @@ import { restoreCookies } from "../vault/restore.js";
 import { performLogin, type LoginInput, type LoginResult } from "../auth/login-flow.js";
 import { totpCode } from "../auth/totp.js";
 import type { EngineHandle } from "../engine/pool.js";
+import type { EngineHandle as RouterEngineHandle, EngineKind } from "../engine/engine-router.js";
 import { runFind, type FindCandidate } from "./find.js";
 import { runScrollUntil, type ScrollUntilResult } from "./scroll-until.js";
 import type { WatchBus } from "../watch/sse.js";
@@ -55,6 +56,20 @@ export interface SessionOptions {
    *  uses this instead of spawning a fresh lightpanda. The handle's release()
    *  is invoked on Session.close(). */
   engine?: EngineHandle | null;
+  /**
+   * Pre-acquired router engine handle (M17). When supplied, `engine` is ignored
+   * and the Session uses this handle's cdp directly (supports both lightpanda and
+   * Chrome). `requestedEngine` must also be set when passing this.
+   */
+  routerHandle?: RouterEngineHandle | null;
+  /**
+   * The engine kind the caller requested (M17). Stored on the session as
+   * `requestedEngine`. When "auto", the session may fall back to Chrome
+   * after goto if page-health fails. When "lightpanda" or "chrome", no
+   * fallback is triggered. Defaults to "lightpanda" when not supplied (legacy
+   * path using the lightpanda-only pool).
+   */
+  requestedEngine?: EngineKind;
   /** Optional watch event bus. When provided, the session emits navigation,
    *  snapshot, action, rejection, and find events to the bus under its id. */
   watchBus?: WatchBus;
@@ -127,22 +142,36 @@ export class Session {
   private consoleBuffer = new ConsoleBuffer(50);
   /** Ring buffer of recent session actions (click, type, etc). */
   private historyBuffer = new HistoryBuffer(10);
+  /** M17 T6: The engine kind the caller originally requested. */
+  requestedEngine: EngineKind = "lightpanda";
+  /** M17 T6: The engine kind currently active (may differ from requestedEngine after fallback). */
+  currentEngine: "lightpanda" | "chrome" = "lightpanda";
+  /** M17 T6: Router-typed handle (mutable — swapped on fallback). Null when using legacy lightpanda pool. */
+  private routerHandle: RouterEngineHandle | null = null;
+  /**
+   * M17 T6: Active CDP session ID — mirrors sessionId initially, set to ""
+   * (falsy) after a swapEngine so that all CDP calls run without a sessionId
+   * (Chrome's page WS is already a page-level connection, no routing needed).
+   */
+  private activeSessionId: string;
 
   private constructor(
     private readonly engine: LightpandaProcess,
-    private readonly cdp: CdpClient,
-    private readonly sessionId: string,
+    private cdp: CdpClient,
+    sessionId: string,
     private currentUrl: string,
     private lastSnapshot: Snapshot | null = null,
     private readonly siteGraph: SiteGraphCache | null = null,
     private readonly watchdog: Watchdog,
     private readonly vault: VaultStore | null = null,
     private profile: string | null = null,
-    private readonly engineHandle: EngineHandle | null = null,
+    private engineHandle: EngineHandle | null = null,
     private readonly watchBus: WatchBus | null = null,
     private readonly watchId: string | null = null,
     private readonly getSiblings: (() => string[]) | null = null
-  ) {}
+  ) {
+    this.activeSessionId = sessionId;
+  }
 
   /** Emit an event to the watch bus if one is wired. No-op otherwise. */
   private emitWatch(event: WatchEvent): void {
@@ -154,8 +183,15 @@ export class Session {
   static async create(opts: SessionOptions = {}): Promise<Session> {
     let engineProcess: LightpandaProcess;
     let engineHandle: EngineHandle | null = null;
+    let routerHandle: RouterEngineHandle | null = opts.routerHandle ?? null;
 
-    if (opts.engine) {
+    if (opts.routerHandle) {
+      // M17 T6: Router engine handle path (lightpanda or Chrome via engine-router).
+      // The handle carries a ready CdpClient and a `kind` field.
+      // We still need a stub `engineProcess` for the constructor signature.
+      // Use a no-op process object — the real lifecycle is managed by the router handle.
+      engineProcess = { cdpBaseUrl: "", close: async () => {} } as unknown as LightpandaProcess;
+    } else if (opts.engine) {
       engineHandle = opts.engine;
       engineProcess = opts.engine.process;
     } else {
@@ -167,28 +203,70 @@ export class Session {
       });
     }
 
-    // Discover the CDP WebSocket.
-    // lightpanda returns an empty /json/list until a target is created, so we
-    // fall back to /json/version which always carries the browser-level WS URL.
-    const wsUrl = await resolveBrowserWsUrl(engineProcess.cdpBaseUrl);
-    if (!wsUrl) {
-      if (engineHandle) {
-        await engineHandle.release();
-      } else {
-        await engineProcess.close();
-      }
-      throw new Error("Session.create: could not discover CDP WebSocket URL from /json/list or /json/version");
-    }
-    const cdp = new CdpClient(wsUrl);
-    await cdp.ready;
+    let cdp: CdpClient;
+    let sessionId: string;
 
-    // Create a fresh target and attach to it (sessionId for subsequent calls).
-    const sessionId = await cdp.createAndAttachTarget("about:blank");
-    await cdp.send("Page.enable", {}, sessionId);
-    await cdp.send("Network.enable", {}, sessionId);
-    await cdp.send("Accessibility.enable", {}, sessionId);
-    await cdp.send("Runtime.enable", {}, sessionId);
-    await cdp.send("Log.enable", {}, sessionId).catch(() => {});  // some engines don't have Log domain
+    if (opts.routerHandle) {
+      // Router handle carries a ready CdpClient. For Chrome, it's connected
+      // directly to the page WS (no target routing needed — sessionId = "").
+      // For lightpanda via router, it's the browser-level WS and needs target creation.
+      cdp = opts.routerHandle.cdp as CdpClient;
+      if (opts.routerHandle.kind === "chrome") {
+        // Chrome CDP is already page-level — no target creation needed.
+        // Using "" as sessionId (falsy) means send() omits the sessionId field.
+        sessionId = "";
+        await cdp.send("Page.enable");
+        await cdp.send("Network.enable");
+        await cdp.send("Accessibility.enable").catch(() => {});
+        await cdp.send("Runtime.enable");
+        await cdp.send("Log.enable").catch(() => {});
+      } else {
+        // Lightpanda via router — same as the legacy path.
+        const wsUrl = opts.routerHandle.port
+          ? `ws://127.0.0.1:${opts.routerHandle.port}`
+          : null;
+        if (!wsUrl) {
+          await opts.routerHandle.release();
+          throw new Error("Session.create: router lightpanda handle has no port");
+        }
+        const resolvedWs = await resolveBrowserWsUrl(`http://127.0.0.1:${opts.routerHandle.port}`);
+        if (!resolvedWs) {
+          await opts.routerHandle.release();
+          throw new Error("Session.create: could not discover CDP WebSocket URL from router handle");
+        }
+        cdp = new CdpClient(resolvedWs);
+        await cdp.ready;
+        sessionId = await cdp.createAndAttachTarget("about:blank");
+        await cdp.send("Page.enable", {}, sessionId);
+        await cdp.send("Network.enable", {}, sessionId);
+        await cdp.send("Accessibility.enable", {}, sessionId);
+        await cdp.send("Runtime.enable", {}, sessionId);
+        await cdp.send("Log.enable", {}, sessionId).catch(() => {});
+      }
+    } else {
+      // Discover the CDP WebSocket.
+      // lightpanda returns an empty /json/list until a target is created, so we
+      // fall back to /json/version which always carries the browser-level WS URL.
+      const wsUrl = await resolveBrowserWsUrl(engineProcess.cdpBaseUrl);
+      if (!wsUrl) {
+        if (engineHandle) {
+          await engineHandle.release();
+        } else {
+          await engineProcess.close();
+        }
+        throw new Error("Session.create: could not discover CDP WebSocket URL from /json/list or /json/version");
+      }
+      cdp = new CdpClient(wsUrl);
+      await cdp.ready;
+
+      // Create a fresh target and attach to it (sessionId for subsequent calls).
+      sessionId = await cdp.createAndAttachTarget("about:blank");
+      await cdp.send("Page.enable", {}, sessionId);
+      await cdp.send("Network.enable", {}, sessionId);
+      await cdp.send("Accessibility.enable", {}, sessionId);
+      await cdp.send("Runtime.enable", {}, sessionId);
+      await cdp.send("Log.enable", {}, sessionId).catch(() => {});  // some engines don't have Log domain
+    }
 
     const wd = new Watchdog({ cache: opts.siteGraph ?? null });
     const inst = new Session(
@@ -201,6 +279,10 @@ export class Session {
       opts.watchSessionId ?? null,
       opts.getSiblings ?? null
     );
+    // M17 T6: Wire engine kind fields.
+    inst.requestedEngine = opts.requestedEngine ?? "lightpanda";
+    inst.currentEngine = routerHandle ? routerHandle.kind : "lightpanda";
+    inst.routerHandle = routerHandle;
 
     // Wire CDP Network events into the ring buffer.
     // CDP timestamps are fractional seconds — multiply by 1000 to get ms.
@@ -276,7 +358,7 @@ export class Session {
     if (this.paused) {
       return { ok: false, reason: "session_paused", token: this.paused.token, handoff_url: this.paused.handoff_url };
     }
-    await this.cdp.send("Page.navigate", { url }, this.sessionId);
+    await this.cdp.send("Page.navigate", { url }, this.activeSessionId);
     this.currentUrl = url;
     // Track goto in history (no target_name for navigation)
     this.historyBuffer.add({
@@ -320,7 +402,7 @@ export class Session {
       this.lastSnapshotMode === mode;
     if (fresh) return this.lastSnapshot!;
     const tree = (await this.cdp.send(
-      "Accessibility.getFullAXTree", {}, this.sessionId
+      "Accessibility.getFullAXTree", {}, this.activeSessionId
     )) as { nodes: AXNode[] };
     const root = tree.nodes.find((n) => !n.parentId) ?? tree.nodes[0];
     if (!root) throw new Error("snapshot: Accessibility.getFullAXTree returned no nodes");
@@ -332,7 +414,7 @@ export class Session {
     if (mode === "visible") {
       try {
         const metrics = (await this.cdp.send(
-          "Page.getLayoutMetrics", {}, this.sessionId
+          "Page.getLayoutMetrics", {}, this.activeSessionId
         )) as { layoutViewport?: { clientWidth?: number; clientHeight?: number }; cssLayoutViewport?: { clientWidth?: number; clientHeight?: number } } | null;
         // Page.getLayoutMetrics shape varies slightly across engines.
         const vw =
@@ -345,7 +427,7 @@ export class Session {
           800;
         const cdpProxy = {
           send: (method: string, params: unknown) =>
-            this.cdp.send(method, params as Record<string, unknown>, this.sessionId),
+            this.cdp.send(method, params as Record<string, unknown>, this.activeSessionId),
         };
         snap.root = (await filterVisible(cdpProxy, snap.root as any, { width: vw, height: vh })) as unknown as typeof snap.root;
         // Recount nodes after filtering.
@@ -369,7 +451,7 @@ export class Session {
     try {
       const cdpProxy = {
         send: (method: string, params: unknown) =>
-          this.cdp.send(method, params as Record<string, unknown>, this.sessionId),
+          this.cdp.send(method, params as Record<string, unknown>, this.activeSessionId),
       };
       snap.root = (await enrichWithShadow(cdpProxy, snap.root as any)) as unknown as typeof snap.root;
     } catch {
@@ -394,10 +476,10 @@ export class Session {
     });
 
     // M14 T4: Extract page metadata (title, canonical, og, jsonld).
-    snap.meta = await extractMeta(this.cdp as any, this.sessionId);
+    snap.meta = await extractMeta(this.cdp as any, this.activeSessionId);
 
     // M14 T5: Extract form definitions (fields, labels, submit_text).
-    snap.forms = await extractForms(this.cdp as any, this.sessionId);
+    snap.forms = await extractForms(this.cdp as any, this.activeSessionId);
 
     // M14 T7: Compute rule-based one-line page summary.
     snap.summary = summarize({
@@ -416,6 +498,9 @@ export class Session {
     // M15 T2: Attach pending dialog (only when one is actually open — keeps snapshot lean).
     const pendingDialog = this.dialogHandler?.pending();
     if (pendingDialog) snap.dialog = pendingDialog;
+
+    // M17 T6: Stamp the engine that produced this snapshot.
+    snap.engine = this.currentEngine;
 
     // M14 T8: Optionally attach base64 PNG screenshot.
     if (opts.include_image) {
@@ -472,15 +557,16 @@ export class Session {
    * Degrades gracefully if Network.setCookies is unavailable.
    * Returns the number of cookies actually imported.
    */
-  async importCookies(cookies: ResumeCookie[]): Promise<number> {
+  async importCookies(cookies: Array<ResumeCookie | { name: string; value: string; domain?: string; path?: string; expires?: number }>): Promise<number> {
     type CdpCookieParam = { name: string; value: string; domain?: string; path: string; expires?: number };
     const cdpCookies: CdpCookieParam[] = [];
     for (const c of cookies) {
-      if (c.raw) {
-        const eq = c.raw.indexOf("=");
+      const raw = (c as ResumeCookie).raw;
+      if (raw) {
+        const eq = raw.indexOf("=");
         if (eq < 1) continue;
-        const name = c.raw.slice(0, eq).trim();
-        const value = c.raw.slice(eq + 1).trim();
+        const name = raw.slice(0, eq).trim();
+        const value = raw.slice(eq + 1).trim();
         if (!name) continue;
         cdpCookies.push({ name, value, domain: c.domain, path: c.path ?? "/" });
       } else {
@@ -490,11 +576,70 @@ export class Session {
     }
     if (cdpCookies.length === 0) return 0;
     try {
-      await this.cdp.send("Network.setCookies", { cookies: cdpCookies }, this.sessionId);
+      await this.cdp.send("Network.setCookies", { cookies: cdpCookies }, this.activeSessionId);
       return cdpCookies.length;
     } catch {
       return 0;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // M17 T6: Engine swap primitives (used by fallbackToChrome in goto path)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Export all cookies from the current engine via CDP Network.getAllCookies.
+   * Returns an empty array on failure (graceful degradation).
+   */
+  async exportCookies(): Promise<Array<{ name: string; value: string; domain?: string; path?: string; expires?: number; httpOnly?: boolean; secure?: boolean }>> {
+    try {
+      const r = await this.cdp.send("Network.getAllCookies", {}, this.activeSessionId) as { cookies?: Array<unknown> } | null;
+      return (r?.cookies ?? []) as Array<{ name: string; value: string; domain?: string; path?: string; expires?: number; httpOnly?: boolean; secure?: boolean }>;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Release the current engine handle back to its pool.
+   * Called before swapEngine so there is never overlap between engines.
+   */
+  async releaseEngine(): Promise<void> {
+    try {
+      if (this.routerHandle) {
+        await this.routerHandle.release();
+        this.routerHandle = null;
+      } else if (this.engineHandle) {
+        await this.engineHandle.release();
+        this.engineHandle = null;
+      } else {
+        await this.engine.close();
+      }
+    } catch { /* swallow — best-effort */ }
+  }
+
+  /**
+   * Swap the session's underlying engine to a new router handle.
+   * Replaces cdp and resets activeSessionId to "" (no target routing needed
+   * for Chrome's page-level CDP connection). Re-enables Page/Network/Accessibility
+   * domains on the new engine.
+   */
+  async swapEngine(newHandle: RouterEngineHandle): Promise<void> {
+    this.routerHandle = newHandle;
+    this.cdp = newHandle.cdp as CdpClient;
+    // Chrome's CdpClient is connected directly to the page WS — no sessionId needed.
+    // Lightpanda via router needs a sessionId but swaps are always to Chrome currently.
+    this.activeSessionId = newHandle.kind === "chrome" ? "" : this.activeSessionId;
+    this.currentEngine = newHandle.kind;
+    // Invalidate snapshot cache so the next snapshot() fetches fresh from the new engine.
+    this.lastSnapshot = null;
+    this.lastSnapshotAt = 0;
+    // Re-enable required CDP domains on the new engine.
+    try { await this.cdp.send("Page.enable"); } catch { /* tolerate */ }
+    try { await this.cdp.send("Network.enable"); } catch { /* tolerate */ }
+    try { await this.cdp.send("Accessibility.enable"); } catch { /* tolerate */ }
+    try { await this.cdp.send("Runtime.enable"); } catch { /* tolerate */ }
+    try { await this.cdp.send("Log.enable"); } catch { /* tolerate */ }
   }
 
   /**
@@ -608,7 +753,7 @@ export class Session {
     }
     const urlBefore = this.currentUrl;
     try {
-      await dispatchClick(this.cdp, this.sessionId, pre.backendNodeId);
+      await dispatchClick(this.cdp, this.activeSessionId, pre.backendNodeId);
     } catch (err: unknown) {
       if (isCdpUnsupported(err)) {
         this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "click", reason: "engine_unsupported", candidates: [] });
@@ -699,14 +844,14 @@ export class Session {
     const urlBefore = this.currentUrl;
     let typeOk = false;
     try {
-      await dispatchType(this.cdp, this.sessionId, pre.backendNodeId, text);
+      await dispatchType(this.cdp, this.activeSessionId, pre.backendNodeId, text);
       typeOk = true;
     } catch (err: unknown) {
       if (!isCdpUnsupported(err)) throw err;
       // CDP Input.dispatchKeyEvent refused (e.g. tel/password inputs on lightpanda).
       // Fall back to Runtime.callFunctionOn (same technique as M8b jsFormLogin).
       const jsOk = await typeViaJs(
-        { send: (method: string, params: unknown) => this.cdp.send(method, params as Record<string, unknown>, this.sessionId) },
+        { send: (method: string, params: unknown) => this.cdp.send(method, params as Record<string, unknown>, this.activeSessionId) },
         pre.backendNodeId,
         text,
       );
@@ -776,7 +921,7 @@ export class Session {
     }
     const urlBefore = this.currentUrl;
     try {
-      await dispatchScroll(this.cdp, this.sessionId, pre.backendNodeId, direction, amount);
+      await dispatchScroll(this.cdp, this.activeSessionId, pre.backendNodeId, direction, amount);
     } catch (err: unknown) {
       if (isCdpUnsupported(err)) {
         this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "scroll", reason: "engine_unsupported", candidates: [] });
@@ -858,7 +1003,7 @@ export class Session {
     const result = await runUpload({
       cdp: {
         send: (method: string, params: unknown) =>
-          this.cdp.send(method as string, params as Record<string, unknown>, this.sessionId),
+          this.cdp.send(method as string, params as Record<string, unknown>, this.activeSessionId),
       },
       resolveBackendNodeId: async (_sid: string) => pre.backendNodeId!,
     }, { stable_id, ...fileSpec });
@@ -1001,7 +1146,7 @@ export class Session {
             const res = await this.cdp.send(
               "Runtime.evaluate",
               { expression: expr, returnByValue: true },
-              this.sessionId,
+              this.activeSessionId,
             ) as { result?: { value?: unknown } };
             return res.result?.value;
           },
@@ -1055,7 +1200,7 @@ export class Session {
     }
     const urlBefore = this.currentUrl;
     try {
-      await dispatchPress(this.cdp, this.sessionId, key);
+      await dispatchPress(this.cdp, this.activeSessionId, key);
     } catch (err: unknown) {
       if (isCdpUnsupported(err)) {
         this.emitWatch({ kind: "rejection", ts: Date.now(), verb: "press_key", reason: "engine_unsupported", candidates: [] });
@@ -1184,7 +1329,7 @@ export class Session {
       // Collect cookies before submit to detect newly added ones.
       let cookiesBefore: Array<{ name: string; value: string }> = [];
       try {
-        const res = (await this.cdp.send("Network.getCookies", {}, this.sessionId)) as {
+        const res = (await this.cdp.send("Network.getCookies", {}, this.activeSessionId)) as {
           cookies: Array<{ name: string; value: string }>;
         };
         cookiesBefore = res.cookies;
@@ -1210,7 +1355,7 @@ export class Session {
       const fillRes = (await this.cdp.send(
         "Runtime.evaluate",
         { expression: fillExpr, returnByValue: true },
-        this.sessionId
+        this.activeSessionId
       )) as { result: { type: string; value: unknown } };
 
       if (fillRes.result.value === "MISSING_FIELDS") return null;
@@ -1219,7 +1364,7 @@ export class Session {
       await this.cdp.send(
         "Runtime.evaluate",
         { expression: "document.querySelector('form').submit(); undefined", returnByValue: true },
-        this.sessionId
+        this.activeSessionId
       );
 
       // Wait for the navigation to settle.
@@ -1229,7 +1374,7 @@ export class Session {
       // the server accepted the credentials and established a session.
       let newCookies: Array<{ name: string; value: string }> = [];
       try {
-        const res = (await this.cdp.send("Network.getCookies", {}, this.sessionId)) as {
+        const res = (await this.cdp.send("Network.getCookies", {}, this.activeSessionId)) as {
           cookies: Array<{ name: string; value: string }>;
         };
         newCookies = res.cookies.filter(
@@ -1243,7 +1388,7 @@ export class Session {
         const locRes = (await this.cdp.send(
           "Runtime.evaluate",
           { expression: "window.location.href", returnByValue: true },
-          this.sessionId
+          this.activeSessionId
         )) as { result: { type: string; value: unknown } };
         if (typeof locRes.result.value === "string" && locRes.result.value) {
           urlAfter = locRes.result.value;
@@ -1273,10 +1418,10 @@ export class Session {
       const paginateSession = {
         extractOnce: async () => {
           if ("selectors" in query && query.selectors) {
-            return runExtract(this.cdp, this.sessionId, { selectors: query.selectors });
+            return runExtract(this.cdp, this.activeSessionId, { selectors: query.selectors });
           }
           if ("css" in query && query.css) {
-            return runExtract(this.cdp, this.sessionId, { css: query.css });
+            return runExtract(this.cdp, this.activeSessionId, { css: query.css });
           }
           throw new Error("extract with paginate requires either css or selectors");
         },
@@ -1296,7 +1441,7 @@ export class Session {
     }
 
     // Single-page extract (existing behavior).
-    const result = await runExtract(this.cdp, this.sessionId, query);
+    const result = await runExtract(this.cdp, this.activeSessionId, query);
     // Track extract in history (success is determined by result not being null)
     const ok = result !== null;
     this.historyBuffer.add({
@@ -1319,7 +1464,7 @@ export class Session {
         const r = await this.cdp.send(
           "Runtime.evaluate",
           { expression: expr, returnByValue: true },
-          this.sessionId
+          this.activeSessionId
         ) as { result?: { value?: unknown } };
         return r.result?.value;
       },
@@ -1341,8 +1486,10 @@ export class Session {
 
   async close(): Promise<void> {
     try { await this.captureToVault(); } catch { /* best-effort */ }
-    await this.cdp.close();
-    if (this.engineHandle) {
+    await this.cdp.close().catch(() => {});
+    if (this.routerHandle) {
+      await this.routerHandle.release().catch(() => {});
+    } else if (this.engineHandle) {
       await this.engineHandle.release();
     } else {
       await this.engine.close();
@@ -1351,14 +1498,14 @@ export class Session {
 
   async restoreFromVault(): Promise<void> {
     if (!this.vault || !this.profile) return;
-    await this.cdp.send("Network.enable", {}, this.sessionId);
+    await this.cdp.send("Network.enable", {}, this.activeSessionId);
     const stored = this.vault.list(this.profile);
-    await restoreCookies(this.cdp, this.sessionId, stored);
+    await restoreCookies(this.cdp, this.activeSessionId, stored);
   }
 
   async captureToVault(): Promise<void> {
     if (!this.vault || !this.profile) return;
-    const cookies = await captureCookies(this.cdp, this.sessionId);
+    const cookies = await captureCookies(this.cdp, this.activeSessionId);
     this.vault.put(this.profile, cookies);
   }
 

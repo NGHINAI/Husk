@@ -410,6 +410,49 @@ If Chrome isn't installed, `husk_handoff({mode: "seamless"})` returns `{ok: fals
 
 MCP surface unchanged: 21 tools. Seamless is a `mode` param on existing `husk_handoff`.
 
+## Engine Selection (M17)
+
+Husk now supports two engines and picks between them automatically.
+
+```ts
+// Default — auto routing (recommended)
+const session = await husk.createSession();  // engine: "auto" implicit
+
+await session.goto("https://wikipedia.org/wiki/Husk");
+// snapshot.engine === "lightpanda" — simple page, fast engine works fine
+
+await session.goto("https://www.linkedin.com/in/someone");
+// Lightpanda fails to render (BroadcastChannel polyfill gap).
+// Husk auto-falls-back to Chrome — same session, cookies preserved.
+// Goto response: { engine: "chrome", fellback_from: "lightpanda",
+//                  fallback_reasons: ["polyfill_gap:BroadcastChannel"] }
+```
+
+### When to override
+
+```ts
+// Force speed (you know the site is simple)
+const fast = await husk.createSession({ engine: "lightpanda" });
+
+// Force compat (you know the site is React-heavy — skip the auto round-trip)
+const real = await husk.createSession({ engine: "chrome" });
+```
+
+### How smart routing works
+
+`engine: "auto"` starts with lightpanda (~10ms, ~50MB). After each `goto`, Husk inspects the snapshot for failure markers:
+
+- **Polyfill console errors** — `BroadcastChannel`, `IndexedDB`, `ServiceWorker`, `customElements`, `MutationObserver` reference errors
+- **Empty AX tree on a known-rich site** — LinkedIn, Gmail, Salesforce, GitHub, X, Facebook, Notion, Linear, Slack, Zoom, Figma, Atlassian, ~24 domains
+- **Only-error text content** — pages showing "Try again" / "Something went wrong" / "Reintentar"
+- **Minimal content + no metadata on a rich site**
+
+If any marker fires, Husk transparently switches the session to Chrome. Cookies + URL are preserved. The agent's next snapshot reveals the fresh state.
+
+### MCP surface
+
+Unchanged — 21 tools total. `engine` is a new optional param on `husk_create_session`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). All contributions require signing

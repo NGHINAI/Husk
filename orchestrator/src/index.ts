@@ -14,6 +14,7 @@ import { EnginePool } from "./engine/pool.js";
 import { locateLightpanda } from "./engine/binary.js";
 import { WatchBus } from "./watch/sse.js";
 import { HumanIOBus } from "./hitl/bus.js";
+import { ChromePool } from "./engine/chrome-pool.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] ?? "help";
@@ -157,6 +158,17 @@ async function runServer(args: StartArgs): Promise<void> {
   });
   await pool.ready();
 
+  // M17 T6: Chrome pool — best-effort; Chrome may not be installed.
+  // minWarm=0 so we don't block startup trying to spawn Chrome.
+  let chromePool: ChromePool | undefined;
+  try {
+    chromePool = new ChromePool({ minWarm: 0 });
+    await chromePool.ready();
+  } catch (e) {
+    console.warn("[husk] Chrome unavailable — Chrome engine will be disabled:", (e as Error).message);
+    chromePool = undefined;
+  }
+
   // Watch event bus: per-session in-memory pub/sub for the /watch/stream SSE route.
   const watchBus = new WatchBus();
 
@@ -174,6 +186,7 @@ async function runServer(args: StartArgs): Promise<void> {
         engine: engineHandle,
         watchBus: opts?.watchBus,
         watchSessionId: opts?.watchSessionId,
+        requestedEngine: opts?.engine ?? "auto",
       });
       if (defaultPolicy) session.setPolicy(defaultPolicy);
       return session;
@@ -194,6 +207,7 @@ async function runServer(args: StartArgs): Promise<void> {
     credentials,
     watchBus,
     humanIO,
+    chromePool,
   });
 
   // Graceful shutdown on SIGINT / SIGTERM
@@ -201,6 +215,7 @@ async function runServer(args: StartArgs): Promise<void> {
     server.log.info({ signal }, "husk: shutting down");
     await sessions.closeAll();
     await pool.close();
+    if (chromePool) { await chromePool.close().catch(() => {}); }
     siteGraph.close();
     vault.close();
     credentials.close();

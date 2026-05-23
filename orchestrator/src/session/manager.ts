@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Session } from "./session.js";
 import { TabGroup } from "./tab-group.js";
 import type { WatchBus } from "../watch/sse.js";
+import type { EngineKind } from "../engine/engine-router.js";
 
 /**
  * Thrown when an operation references a session_id that doesn't exist
@@ -21,7 +22,7 @@ export class SessionNotFoundError extends Error {
  * production this is `Session.create.bind(Session, opts)`. In tests we
  * pass a function returning a fake.
  */
-export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; watchSessionId?: string; getSiblings?: () => string[] }) => Promise<Session>;
+export type SessionFactory = (opts?: { profile?: string; watchBus?: WatchBus; watchSessionId?: string; getSiblings?: () => string[]; engine?: EngineKind }) => Promise<Session>;
 
 /**
  * Owns the lifecycle of all live sessions. Each session has a unique id
@@ -38,8 +39,8 @@ export class SessionManager {
     private readonly watchBus?: WatchBus
   ) {}
 
-  async create(opts: { profile?: string; parent_session_id?: string } = {}): Promise<string> {
-    const { parent_session_id, profile: explicitProfile, ...rest } = opts;
+  async create(opts: { profile?: string; parent_session_id?: string; engine?: EngineKind } = {}): Promise<string> {
+    const { parent_session_id, profile: explicitProfile, engine: engineKind, ...rest } = opts;
 
     // Validate parent exists if specified
     if (parent_session_id !== undefined && !this.sessions.has(parent_session_id)) {
@@ -69,6 +70,7 @@ export class SessionManager {
       watchBus: this.watchBus,
       watchSessionId: id,
       getSiblings,
+      engine: engineKind ?? "auto",
     });
 
     // Wrap snapshot() so sibling_sessions is always present and always up-to-date.

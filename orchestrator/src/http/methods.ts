@@ -9,6 +9,7 @@ import type { WaitForCondition, WaitForResult } from "../session/wait.js";
 import type { PaginateOpts } from "../session/paginate.js";
 import type { HumanIOBus } from "../hitl/bus.js";
 import type { WatchBus } from "../watch/sse.js";
+import type { ChromePool } from "../engine/chrome-pool.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -36,6 +37,11 @@ export interface MethodContext {
    * Shared between methods.ts (writer) and hitl-routes.ts (caller).
    */
   seamlessTriggers?: Map<string, () => void>;
+  /**
+   * M17 T6: Chrome pool — exposed to goto so it can pass to fallbackToChrome.
+   * Absent when Chrome is not available on this machine.
+   */
+  chromePool?: ChromePool;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -72,12 +78,13 @@ export const METHODS = {
   },
 
   async create_session(
-    params: { profile?: string; parent_session_id?: string } | undefined,
+    params: { profile?: string; parent_session_id?: string; engine?: "lightpanda" | "chrome" | "auto" } | undefined,
     ctx: MethodContext
   ): Promise<CreateSessionResult> {
     const session_id = await ctx.sessions.create({
       profile: params?.profile,
       parent_session_id: params?.parent_session_id,
+      engine: params?.engine ?? "auto",
     });
     const watch_url =
       ctx.host === "127.0.0.1" && ctx.portRef != null
@@ -89,7 +96,7 @@ export const METHODS = {
   async goto(
     params: { session_id: string; url: string; include_snapshot?: boolean },
     ctx: MethodContext
-  ): Promise<GotoResult> {
+  ): Promise<GotoResult & { engine?: string; fellback_from?: string; fallback_reasons?: string[]; fallback_failed?: { reason: string; attempted_reasons: string[] } }> {
     if (typeof params.url !== "string") throw new InvalidUrlError(String(params.url));
     try {
       // eslint-disable-next-line no-new
@@ -98,7 +105,45 @@ export const METHODS = {
       throw new InvalidUrlError(params.url);
     }
     const session = ctx.sessions.get(params.session_id);
-    return session.goto(params.url, { include_snapshot: params.include_snapshot });
+    const result = await session.goto(params.url, { include_snapshot: params.include_snapshot });
+
+    // M17 T6: Auto page-health check — only when:
+    //  1. The session was created with engine: "auto"
+    //  2. It is currently on lightpanda (hasn't already fallen back)
+    //  3. A Chrome pool is available in this context
+    if (
+      result.ok &&
+      session.requestedEngine === "auto" &&
+      session.currentEngine === "lightpanda" &&
+      ctx.chromePool
+    ) {
+      const { detectPageHealth } = await import("../engine/page-health.js");
+      const { fallbackToChrome } = await import("../engine/fallback.js");
+      const snap = (result as { snapshot?: Snapshot }).snapshot ?? await session.snapshot();
+      const verdict = detectPageHealth(snap);
+      if (verdict.should_fallback) {
+        const fb = await fallbackToChrome(session as any, ctx.chromePool, params.session_id);
+        if (fb.ok) {
+          // Re-snapshot from the new engine (post-goto snapshot already navigated via fallback).
+          const newSnap = await session.snapshot({ force: true });
+          return {
+            ...result,
+            ok: true as const,
+            snapshot: newSnap,
+            engine: "chrome",
+            fellback_from: "lightpanda",
+            fallback_reasons: verdict.reasons,
+          };
+        }
+        // Fallback failed — return original result with a flag.
+        return {
+          ...result,
+          fallback_failed: { reason: fb.reason ?? "unknown", attempted_reasons: verdict.reasons },
+        };
+      }
+    }
+
+    return result;
   },
 
   async snapshot(
