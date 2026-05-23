@@ -90,6 +90,8 @@ export interface SpawnChromeOpts {
   targetUrl: string;
   profileDir: string;
   port: number;
+  /** Extra CLI flags inserted before the target URL. Backwards-compatible — defaults to []. */
+  extraArgs?: string[];
 }
 
 export interface SpawnedChrome {
@@ -107,6 +109,7 @@ export function spawnChrome(opts: SpawnChromeOpts): SpawnedChrome {
     `--user-data-dir=${opts.profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    ...(opts.extraArgs ?? []),
     opts.targetUrl,
   ];
   const child = spawn(opts.binaryPath, args, {
