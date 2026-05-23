@@ -55,12 +55,15 @@ class Husk:
         *,
         profile: Optional[str] = None,
         parent_session_id: Optional[str] = None,
+        engine: Optional[str] = None,  # "lightpanda" | "chrome" | "auto"
     ) -> Session:
         params: dict[str, Any] = {}
         if profile is not None:
             params["profile"] = profile
         if parent_session_id is not None:
             params["parent_session_id"] = parent_session_id
+        if engine is not None:
+            params["engine"] = engine
         r = await self._client.call("create_session", params)
         session = Session(self._client, r["session_id"])
         session.watch_url = r.get("watch_url")

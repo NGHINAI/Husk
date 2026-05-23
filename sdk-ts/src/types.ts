@@ -30,6 +30,8 @@ export interface Snapshot {
   root: SnapshotNode;
   /** Other session ids in the same tab group (sharing cookie profile). Empty for solo sessions. */
   sibling_sessions: string[];
+  /** Engine that produced this snapshot. M17. */
+  engine?: "lightpanda" | "chrome";
 }
 
 export interface SnapshotDiff {
@@ -84,6 +86,19 @@ export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff |
 
 /** ActionResult widened with the post-action snapshot (present by default, absent when include_snapshot:false). */
 export type ActionResultWithSnapshot<T = ActionResult> = T & { snapshot?: Snapshot };
+
+/**
+ * Extension fields present on goto results when the engine-router fallback fired. M17.
+ * These appear alongside the normal goto result object.
+ */
+export interface GotoFallbackFields {
+  /** Set when lightpanda was tried first and Chrome was used instead. */
+  fellback_from?: "lightpanda";
+  /** Reasons the page-health check triggered the fallback. */
+  fallback_reasons?: string[];
+  /** Set when the fallback itself failed (e.g. Chrome not installed). */
+  fallback_failed?: { reason: string; attempted_reasons: string[] };
+}
 
 // ----- Policy types (parsed server-side via set_policy; SDK sends raw YAML) -----
 
