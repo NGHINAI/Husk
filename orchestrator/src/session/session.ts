@@ -37,6 +37,7 @@ import { deriveApiHints } from "../snapshot/api-hints.js";
 import { DialogHandler } from "./dialog-handler.js";
 import { enrichWithShadow } from "../snapshot/shadow-walker.js";
 import type { ResumeCookie } from "../hitl/types.js";
+import { detectOpenedModal } from "../snapshot/opened-modal.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -96,7 +97,7 @@ export interface SessionOptions {
  *      or `null` if there is no prior. The current snapshot becomes the new baseline.
  *   5. `session.close()` — disconnects and kills the subprocess.
  */
-export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
+export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null; opened_modal?: import("../snapshot/opened-modal.js").OpenedModal } | RejectionEnvelope;
 
 /**
  * Target specifier for action methods. Callers pass EITHER:
@@ -1043,7 +1044,16 @@ export class Session {
     if (!include) return result;
     try {
       const snap = await this.snapshot({ force: false });
-      return { ...result, snapshot: snap };
+      const withSnap = { ...result, snapshot: snap };
+      // Detect newly-visible modals on successful actions. Attach opened_modal
+      // to the result so agents know they must click a confirmation button.
+      // We run on the FULL snapshot tree (not diff) — JS-driven overlays like
+      // LinkedIn artdeco don't reliably appear in the mutation diff.
+      if ("ok" in withSnap && withSnap.ok === true) {
+        const modal = detectOpenedModal(snap);
+        if (modal) (withSnap as Record<string, unknown>).opened_modal = modal;
+      }
+      return withSnap;
     } catch {
       return result;
     }

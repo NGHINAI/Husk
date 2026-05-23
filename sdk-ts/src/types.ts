@@ -82,7 +82,17 @@ export interface Warning {
   message: string;
 }
 
-export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null } | RejectionEnvelope;
+export interface OpenedModal {
+  /** The dialog's stable_id. Pass to husk_click to interact with the modal. */
+  stable_id: string;
+  role: "dialog" | "alertdialog" | "menu";
+  /** First heading child, or aria-label of the dialog. Null when not determinable. */
+  title: string | null;
+  /** All button-role (and link-role) descendants of the modal. */
+  buttons: Array<{ stable_id: string; name: string }>;
+}
+
+export type ActionResult = { ok: true; warnings: Warning[]; diff: SnapshotDiff | null; opened_modal?: OpenedModal } | RejectionEnvelope;
 
 /** ActionResult widened with the post-action snapshot (present by default, absent when include_snapshot:false). */
 export type ActionResultWithSnapshot<T = ActionResult> = T & { snapshot?: Snapshot };

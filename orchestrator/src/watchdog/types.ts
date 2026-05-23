@@ -1,3 +1,6 @@
+import type { OpenedModal } from "../snapshot/opened-modal.js";
+export type { OpenedModal };
+
 /**
  * The verbs the watchdog gates. Matches the HTTP method names
  * exposed at /v1/jsonrpc.
