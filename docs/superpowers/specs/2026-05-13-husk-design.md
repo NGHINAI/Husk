@@ -1193,4 +1193,73 @@ This prevents third-party tracker cookies (which Chrome accumulates during norma
 
 ---
 
+### 5.12 Chrome Engine Adapter + Smart Routing (M17 — shipped 2026-05-23)
+
+#### Motivation
+
+Lightpanda is fast (~50MB, ~10ms startup, no paint) but doesn't implement every Web API. Modern SPAs (LinkedIn, Gmail, Salesforce, modern GitHub, Notion, Linear) depend on APIs like `BroadcastChannel`, `IndexedDB`, `ServiceWorker`, `customElements` — when those throw, the React hydration fails and the page is unrecoverable. M16's seamless handoff helped with auth, but couldn't fix the rendering ceiling.
+
+M17 adds a **Chrome engine adapter** parallel to lightpanda. The agent calls `husk_create_session({engine: "auto"})` (default) and Husk transparently picks the right engine: tries lightpanda first (fast path), falls back to Chrome when the page fails to render. **Same MCP surface (21 tools)** — `engine` is just a param.
+
+#### Engine selection
+
+| Mode | Spinup | Memory | Compat | When to use |
+|---|---|---|---|---|
+| `lightpanda` | ~10ms | ~50MB | Server-rendered + moderate JS | Known-simple sites, speed-critical |
+| `chrome` | ~1.5s | ~500MB | Anything Chrome runs | Known-rich sites, skip the lightpanda round-trip |
+| `auto` (default) | ~10ms (best case) | ~50MB (best case) | Both worlds | Unknown sites — let Husk pick |
+
+#### Smart routing in goto
+
+When the session was created with `engine: "auto"`:
+1. lightpanda runs `goto` as usual
+2. Eager snapshot fires (M9)
+3. `detectPageHealth(snapshot)` inspects four failure markers:
+   - **Polyfill console errors** — known fatal patterns (`BroadcastChannel is not defined`, `IndexedDB is not defined`, `ServiceWorker is not defined`, `customElements is not defined`, `MutationObserver is not defined`)
+   - **Empty AX on a known-rich site** — `nodeCount <= 5` AND host is in `KNOWN_RICH_SITES` (LinkedIn, Gmail, Salesforce, GitHub, X, Facebook, Notion, Linear, Slack, Zoom, Figma, Atlassian, ~24 domains)
+   - **Only-error text** — `nodeCount <= 5` AND visible text matches `/reintentar|try again|something went wrong|page not available/i`
+   - **Minimal content on rich site** — rich-site URL + no JSON-LD + no OG + no forms + < 20 AX nodes
+4. If any marker fires, `fallbackToChrome` runs:
+   - Capture URL + cookies from lightpanda
+   - Release lightpanda handle
+   - Acquire Chrome handle from ChromePool
+   - Swap engines on the same Session (session_id unchanged)
+   - Restore cookies via `Network.setCookies`
+   - Re-navigate via Chrome
+5. The agent's `goto` response carries `engine: "chrome"`, `fellback_from: "lightpanda"`, `fallback_reasons: [...]` — but otherwise looks identical. Stable IDs naturally invalidate (different engine = different AX tree); the next snapshot reveals the fresh state.
+
+If fallback fails (Chrome not installed, pool exhausted, swap error), response includes `fallback_failed: {reason, attempted_reasons}` and the original lightpanda result stays. The agent can re-call with `engine: "chrome"` explicitly, or try a different approach.
+
+#### ChromePool
+
+Memory-aware sizing parallel to M9's EnginePool:
+- `maxParallel = min(50, freeMb / 500)` — vs lightpanda's `/30`
+- `minWarm = 1` — vs lightpanda's `4` (Chrome is heavy; don't aggressively pre-warm)
+- `idleShrinkMs = 5 min` — vs lightpanda's shorter idle (Chrome spinup is expensive, keep warm longer)
+- Reaper respects `minWarm` floor
+- Per-handoff isolated profile dir (`~/.husk/chrome-sessions/<session_id>`), deleted on release
+
+Falls back gracefully if Chrome isn't installed — Chrome pool init logs a warning, server continues; `engine: "chrome"` or auto-fallback returns `chrome_not_found`.
+
+#### Decisions
+
+**Decision X — `auto` is the new default for `create_session`.** Lightpanda's speed for the 80% of sites that don't need Chrome; full compat for the 20% that do. Explicit `"lightpanda"` or `"chrome"` overrides. Backwards-compatible — existing callers that don't pass `engine` see no surprise (`"auto"` behaves as `"lightpanda"` for simple sites).
+
+**Decision Y — Engine swap is transparent on session_id.** A fallback preserves the session_id; the agent sees a fresh AX tree (because the engine changed), which naturally invalidates stale stable IDs. The `engine` field on snapshot + the `fellback_from` flag on goto results make the swap visible if the agent cares to read it.
+
+**Decision Z — Chrome is headless by default.** `engine: "chrome"` always spawns `--headless=new` for engine use; M16's seamless handoff stays headed (user needs to see it). Both modes coexist — different use cases, same `chrome-launcher` foundation.
+
+#### MCP surface
+
+**21 tools, unchanged from M16.** `engine` is a new optional param on existing `husk_create_session`.
+
+#### Limitations
+
+- Chrome must be installed for `engine: "chrome"` or auto-fallback. Falls back gracefully when not.
+- `KNOWN_RICH_SITES` is a curated list; sites NOT in the list still get fallback if their console fires polyfill errors. The list helps with sites that fail silently.
+- eTLD+1 detection (for cookie scoping during fallback) uses last-2-parts heuristic, not the Public Suffix List. `example.co.uk` is treated as `co.uk`. Acceptable for v1; PSL integration is a polish.
+- Memory-bound: a machine with 4GB free RAM can only run ~8 concurrent Chrome sessions. Lightpanda allows ~130 in the same budget.
+
+---
+
 *End of design document.*
