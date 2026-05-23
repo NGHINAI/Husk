@@ -319,36 +319,131 @@ export const METHODS = {
   ) {
     const session = ctx.sessions.get(params.session_id);
 
+    let result: Awaited<ReturnType<typeof session.login>> | undefined;
+
     // Mode B: inline credentials supplied → use them directly, never touch the store.
     if (params.username !== undefined && params.password !== undefined) {
-      return await session.login({
+      result = await session.login({
         username: params.username,
         password: params.password,
         totp_secret: params.totp_secret,
         include_snapshot: params.include_snapshot,
       });
-    }
-
-    // Mode A: profile+key lookup from the credentials store.
-    if (params.profile && params.key) {
+    } else if (params.profile && params.key) {
+      // Mode A: profile+key lookup from the credentials store.
       const cred = ctx.credentials.get(params.profile, params.key);
       if (!cred) {
         return { ok: false, reason: "credential_not_found", key: params.key };
       }
-      return await session.login({
+      result = await session.login({
         username: cred.username,
         password: cred.password,
         totp_secret: cred.totp_secret,
         include_snapshot: params.include_snapshot,
       });
+    } else {
+      // Neither mode supplied — caller error.
+      return {
+        ok: false,
+        reason: "invalid_login_params",
+        message: "login requires either {profile, key} or {username, password}",
+      };
     }
 
-    // Neither mode supplied — caller error.
-    return {
-      ok: false,
-      reason: "invalid_login_params",
-      message: "login requires either {profile, key} or {username, password}",
-    };
+    // Happy path — automated login succeeded.
+    if (result.ok) return result;
+
+    // ── Bot-block escalation ──────────────────────────────────────────────────
+    // Conditions required for escalation:
+    //   1. Automated login failed
+    //   2. A Chrome pool is available (Chrome installed on this machine)
+    //   3. The server is bound to 127.0.0.1 (local; seamless handoff is loopback-only)
+    //   4. A portRef is wired (needed to compute huskPort for the overlay script)
+    if (
+      !result.ok &&
+      ctx.chromePool &&
+      ctx.host === "127.0.0.1" &&
+      ctx.portRef != null
+    ) {
+      const { detectLoginBotBlock } = await import("../auth/bot-block-detector.js");
+      const snap = await session.snapshot({ maxAgeMs: 0 }); // fresh snapshot
+      const verdict = detectLoginBotBlock(snap);
+
+      if (verdict.is_blocked) {
+        // Escalate — open the user's real Chrome at the login URL, block until done.
+        ctx.seamlessTriggers ??= new Map();
+
+        const {
+          findChrome,
+          spawnChrome,
+          connectToChrome,
+          createHandoffProfileDir,
+          runSeamlessHandoff,
+        } = await import("../handoff/index.js");
+
+        const { rm } = await import("node:fs/promises");
+        const token = `login-${params.session_id}-${Date.now()}`;
+
+        const handoff = await runSeamlessHandoff({
+          session,
+          targetUrl: verdict.login_url,
+          timeoutMs: 600_000,
+          token,
+          huskPort: ctx.portRef.value,
+          findChrome,
+          spawnChrome,
+          connectToChrome,
+          createProfileDir: createHandoffProfileDir,
+          cleanupProfileDir: async (dir) => {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+          },
+          onManualDoneHandle: (trigger) => {
+            ctx.seamlessTriggers!.set(token, trigger);
+          },
+        });
+
+        ctx.seamlessTriggers.delete(token);
+
+        if (!handoff.resumed) {
+          return {
+            ok: false as const,
+            reason: "handoff_failed" as const,
+            handoff_reason: handoff.reason,
+            escalation_reasons: verdict.reasons,
+          };
+        }
+
+        // Verify we're no longer on a login path after the handoff.
+        const { LOGIN_URL_PATTERNS } = await import("../auth/bot-block-detector.js");
+        const postSnap = await session.snapshot({ maxAgeMs: 0 });
+        const stillOnLogin = LOGIN_URL_PATTERNS.some((re) => re.test(postSnap.url ?? ""));
+
+        if (stillOnLogin) {
+          return {
+            ok: false as const,
+            reason: "login_verification_failed" as const,
+            escalated_via: "seamless_handoff" as const,
+            cookies_imported: handoff.cookies_imported,
+            ms_paused: handoff.ms_paused,
+            escalation_reasons: verdict.reasons,
+          };
+        }
+
+        return {
+          ok: true as const,
+          escalated_via: "seamless_handoff" as const,
+          cookies_imported: handoff.cookies_imported,
+          ms_paused: handoff.ms_paused,
+          escalation_reasons: verdict.reasons,
+          url_before: snap.url,
+          url_after: postSnap.url,
+          snapshot: (params.include_snapshot !== false) ? postSnap : undefined,
+        };
+      }
+    }
+
+    // Real credential failure or escalation unavailable — return original result.
+    return result;
   },
 
   async batch_visit(
