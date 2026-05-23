@@ -61,7 +61,7 @@ export interface SwappableSession {
   /** Replace the session's internal engine handle with a new one. */
   swapEngine(handle: EngineHandle): Promise<void>;
   /** Navigate the current engine to the given URL. */
-  goto(opts: { url: string }): Promise<unknown>;
+  goto(url: string, opts?: { include_snapshot?: boolean }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ export async function fallbackToChrome(
   // Step 7: re-navigate to the captured URL — skip if null or about:blank
   if (currentUrl && currentUrl !== "about:blank") {
     try {
-      await session.goto({ url: currentUrl });
+      await session.goto(currentUrl);
     } catch {
       // Navigation failed, but the engine swap itself succeeded.
       // Return ok:true — the caller can retry navigation independently.

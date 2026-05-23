@@ -10,6 +10,7 @@ import type { VaultStore } from "../vault/store.js";
 import type { CredentialsStore } from "../credentials/store.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { HumanIOBus } from "../hitl/bus.js";
+import type { ChromePool } from "../engine/chrome-pool.js";
 import { WATCH_HTML } from "../watch/index.html.js";
 import { registerHitlRoutes } from "./hitl-routes.js";
 
@@ -27,6 +28,8 @@ export interface HuskServerOptions {
   watchBus?: WatchBus;
   /** Human-in-the-loop bus for ask_human / handoff answer routes. Only registered when host === "127.0.0.1". */
   humanIO?: HumanIOBus;
+  /** M17 T6: Chrome pool — passed to method context so goto can run page-health fallback. */
+  chromePool?: ChromePool;
 }
 
 export interface HuskServer {
@@ -62,6 +65,7 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
     humanIO: opts.humanIO,
     watchBus: opts.watchBus,
     seamlessTriggers,
+    chromePool: opts.chromePool,
   };
 
   app.post("/v1/jsonrpc", async (c) => {

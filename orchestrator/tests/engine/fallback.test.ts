@@ -52,7 +52,7 @@ describe("fallbackToChrome", () => {
     expect(session.importCookies).toHaveBeenCalledWith([
       { name: "li_at", value: "abc", domain: ".linkedin.com" },
     ]);
-    expect(session.goto).toHaveBeenCalledWith({ url: "https://linkedin.com/login" });
+    expect(session.goto).toHaveBeenCalledWith("https://linkedin.com/login");
   });
 
   it("returns ok:false with chrome_not_found when pool can't spawn", async () => {
@@ -83,7 +83,7 @@ describe("fallbackToChrome", () => {
     const result = await fallbackToChrome(session, pool as any, "sess-1");
     expect(result.ok).toBe(true);
     expect(result.cookies_transferred).toBe(0);
-    expect(session.goto).toHaveBeenCalledWith({ url: "https://linkedin.com/login" });
+    expect(session.goto).toHaveBeenCalledWith("https://linkedin.com/login");
   });
 
   it("does NOT crash if session.exportCookies throws — proceeds with 0 cookies", async () => {

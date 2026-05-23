@@ -128,6 +128,9 @@ export interface Snapshot {
    *  Only present when a dialog is currently blocking the page.
    *  Absent when no dialog is open — agents should guard with `snap.dialog?.`. */
   dialog?: import("../session/dialog-handler.js").PendingDialog;
+
+  /** M17 T6: The engine that produced this snapshot. */
+  engine?: "lightpanda" | "chrome";
 }
 
 // ----- Diff types for mutation poller (Task 7) -----
