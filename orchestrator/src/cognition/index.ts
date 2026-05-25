@@ -20,3 +20,12 @@ export {
   decay,
   reliability,
 } from "./confidence.js";
+
+export type { ExplorationOptions } from "./exploration.js";
+export {
+  ExplorationHarness,
+  escapeRegex,
+  normalizeUrl,
+  mostDistinctiveAxNodes,
+  signatureOf,
+} from "./exploration.js";
