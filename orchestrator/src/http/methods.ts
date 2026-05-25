@@ -858,6 +858,30 @@ export const METHODS = {
       },
     };
   },
+
+  /**
+   * M19 Phase B T8: Execute a named intention against the session's current page.
+   *
+   * Looks up the intention from the SQLite store (keyed by site + intention_name),
+   * compiles and executes it via IntentionCompiler, and returns an Outcome envelope.
+   * Never throws — all failures are captured in Outcome.reason.
+   */
+  async intend(
+    params: {
+      session_id: string;
+      intention_name: string;
+      args?: Record<string, unknown>;
+      site?: string;
+    },
+    ctx: MethodContext,
+  ) {
+    const session = ctx.sessions.get(params.session_id);
+    return await session.intend({
+      intention_name: params.intention_name,
+      args: params.args,
+      site: params.site,
+    });
+  },
 } as const;
 
 /** Type-level enumeration of all method names. */
