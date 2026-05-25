@@ -10,6 +10,16 @@ export interface ToolSpec {
   };
 }
 
+/** Narrow helper to extract stable_id / intent from the `target` discriminated union. */
+function resolveTarget(target: unknown): { stable_id?: string; intent?: string } {
+  if (target === null || target === undefined || typeof target !== "object") return {};
+  const t = target as Record<string, unknown>;
+  const out: { stable_id?: string; intent?: string } = {};
+  if (typeof t.stable_id === "string") out.stable_id = t.stable_id;
+  if (typeof t.intent === "string") out.intent = t.intent;
+  return out;
+}
+
 export const TOOL_SURFACE: ToolSpec[] = [
   {
     name: "husk_create_session",
@@ -299,6 +309,60 @@ export const TOOL_SURFACE: ToolSpec[] = [
     },
   },
   {
+    name: "husk_intend",
+    description: `husk_intend — Single primitive for ALL page actions.
+
+TWO USAGE MODES:
+
+(1) Named intention (preferred — uses the per-site cognition layer):
+   husk_intend({session_id, intention_name: "send_connect", args: {person: "..."}})
+   → executes a YAML-defined intention; returns Outcome envelope with ok/evidence/reason
+
+(2) Raw verb (for sites without intentions yet):
+   husk_intend({session_id, verb: "click", target: {intent: "Sign in button"}})
+   husk_intend({session_id, verb: "type", target: {intent: "Email"}, text: "..."})
+   husk_intend({session_id, verb: "scroll", direction: "down", amount_px: 800})
+   husk_intend({session_id, verb: "press_key", key: "Enter"})
+   husk_intend({session_id, verb: "wait_for", predicate: {type: "url_pattern", regex: "/feed"}, timeout_ms: 5000})
+   husk_intend({session_id, verb: "upload", target: {intent: "Resume upload"}, file_path: "..."})
+
+Verb mode runs through the watchdog (M5) — same safety guarantees as the old husk_click/type/etc.
+Intention mode adds state-graph BFS + verify + failure-mode classification on top.
+
+PREFER intention mode when possible — it's the higher-level contract (you describe what; Husk figures out how).
+
+OUTCOME (intention mode):
+{ ok, intention, state_before, state_after, evidence[], reason?, recovery_options?[], steps_observed[] }
+
+REJECTION (verb mode):
+{ ok:false, reason, stable_id_attempted?, candidates?[] }
+`,
+    inputSchema: {
+      type: "object",
+      required: ["session_id"],
+      properties: {
+        session_id: { type: "string" },
+        intention_name: { type: "string", description: "When set, runs intention via cognition layer." },
+        args: { type: "object", description: "Args for the intention (when intention_name set)." },
+        capability: { type: "object", description: "CapabilityRequirement override for this call." },
+        verb: {
+          type: "string",
+          enum: ["click", "type", "scroll", "press_key", "wait_for", "upload"],
+          description: "When set, runs raw verb via watchdog.",
+        },
+        target: { description: "IntentRef or {stable_id} (verb mode)" },
+        text: { type: "string", description: "For verb=type." },
+        direction: { type: "string", enum: ["up", "down", "into_view"], description: "For verb=scroll." },
+        amount_px: { type: "integer", description: "For verb=scroll." },
+        key: { type: "string", description: "For verb=press_key." },
+        predicate: { type: "object", description: "For verb=wait_for." },
+        timeout_ms: { type: "integer", description: "For verb=wait_for." },
+        file_path: { type: "string", description: "For verb=upload." },
+        file_base64: { type: "string", description: "For verb=upload (alternative to file_path)." },
+      },
+    },
+  },
+  {
     name: "husk_inspect",
     description: `husk_inspect — Read-only introspection of the current page.
 
@@ -451,6 +515,64 @@ export async function handleToolCall(
 ): Promise<unknown> {
   if (toolName === "husk_version") {
     return { name: "husk-mcp", version: VERSION };
+  }
+
+  if (toolName === "husk_intend") {
+    if (args.intention_name) {
+      return await client.call("intend", {
+        session_id: args.session_id,
+        intention_name: args.intention_name,
+        args: args.args ?? {},
+        ...(args.capability !== undefined ? { capability: args.capability } : {}),
+      });
+    }
+    // Raw-verb mode: spread target into stable_id/intent for verbs that support element targeting
+    const targetFields = resolveTarget(args.target);
+    switch (args.verb) {
+      case "click":
+        return await client.call("click", {
+          session_id: args.session_id,
+          ...targetFields,
+        });
+      case "type":
+        return await client.call("type", {
+          session_id: args.session_id,
+          ...targetFields,
+          text: args.text,
+        });
+      case "scroll":
+        return await client.call("scroll", {
+          session_id: args.session_id,
+          ...targetFields,
+          direction: args.direction,
+          amount: args.amount_px,
+        });
+      case "press_key":
+        return await client.call("press_key", {
+          session_id: args.session_id,
+          key: args.key,
+        });
+      case "wait_for": {
+        // Spread predicate fields directly — wait_for RPC takes them at the top level
+        const predicate = (args.predicate !== null && typeof args.predicate === "object")
+          ? (args.predicate as Record<string, unknown>)
+          : {};
+        return await client.call("wait_for", {
+          session_id: args.session_id,
+          ...predicate,
+          ...(args.timeout_ms !== undefined ? { timeout_ms: args.timeout_ms } : {}),
+        });
+      }
+      case "upload":
+        return await client.call("upload", {
+          session_id: args.session_id,
+          ...targetFields,
+          ...(args.file_path !== undefined ? { file_path: args.file_path } : {}),
+          ...(args.file_base64 !== undefined ? { content_base64: args.file_base64 } : {}),
+        });
+      default:
+        throw new Error("husk_intend requires either intention_name or verb");
+    }
   }
 
   if (toolName === "husk_inspect") {
