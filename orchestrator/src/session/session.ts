@@ -38,6 +38,10 @@ import { DialogHandler } from "./dialog-handler.js";
 import { enrichWithShadow } from "../snapshot/shadow-walker.js";
 import type { ResumeCookie } from "../hitl/types.js";
 import { detectOpenedModal } from "../snapshot/opened-modal.js";
+import { IntentionStore } from "../cognition/intention-store.js";
+import { CognitionStorage } from "../cognition/storage.js";
+import { IntentionCompiler, type SessionAdapter } from "../cognition/intention-compiler.js";
+import type { Outcome } from "../cognition/intention-types.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -1492,6 +1496,93 @@ export class Session {
   async handleDialog(action: "accept" | "dismiss", text?: string): Promise<void> {
     if (!this.dialogHandler) return;
     await this.dialogHandler.manualHandle(action, text);
+  }
+
+  /**
+   * M19 Phase B T8: Execute a named intention against the current page.
+   *
+   * Looks up the intention from the SQLite store, builds a StateGraph, instantiates
+   * the IntentionCompiler, and delegates execution via a SessionAdapter bound to this
+   * session's primitives.
+   *
+   * Returns an Outcome envelope — never throws.
+   */
+  async intend<T = unknown>(args: {
+    intention_name: string;
+    args?: Record<string, unknown>;
+    /** Override the site (defaults to current URL hostname, "www." stripped). */
+    site?: string;
+  }): Promise<Outcome<T>> {
+    // Derive site from URL hostname when not supplied (strip "www." for consistency).
+    let site: string;
+    if (args.site) {
+      site = args.site;
+    } else {
+      try {
+        const host = new URL(this.currentUrl).hostname;
+        site = host.startsWith("www.") ? host.slice(4) : host;
+      } catch {
+        site = this.currentUrl;
+      }
+    }
+
+    // When no siteGraph is wired in (e.g. in tests), return unknown_site immediately.
+    if (!this.siteGraph) {
+      return {
+        ok: false,
+        intention: args.intention_name,
+        args: args.args ?? {},
+        state_before: null,
+        evidence: [],
+        duration_ms: 0,
+        reason: "unknown_site",
+        reason_detail: `no intention "${args.intention_name}" defined for ${site} (no siteGraph wired)`,
+        steps_observed: [],
+      };
+    }
+
+    const store = new IntentionStore(this.siteGraph.db);
+    const intention = store.get(site, args.intention_name);
+
+    if (!intention) {
+      return {
+        ok: false,
+        intention: args.intention_name,
+        args: args.args ?? {},
+        state_before: null,
+        evidence: [],
+        duration_ms: 0,
+        reason: "unknown_site",
+        reason_detail: `no intention "${args.intention_name}" defined for ${site}`,
+        steps_observed: [],
+      };
+    }
+
+    const storage = new CognitionStorage(this.siteGraph);
+    const graph = storage.loadStateGraph(site);
+    const compiler = new IntentionCompiler({ graph, site });
+
+    const adapter: SessionAdapter = {
+      currentUrl: () => this.currentUrl,
+      snapshot: () => this.snapshot(),
+      click: (id) => this.click(id).then(() => {}),
+      type: (id, text) => this.type(id, text).then(() => {}),
+      pressKey: (key) => this.press_key(key).then(() => {}),
+      scroll: (a) => this.scroll(
+        a.stable_id != null ? { stable_id: a.stable_id } : null,
+        a.direction as ScrollDirection,
+        a.amount_px ?? 800,
+      ).then(() => {}),
+      navigate: (url) => this.goto(url).then(() => {}),
+      recentNetwork: () => this.networkBuffer.recent().map((e) => ({
+        method: e.method,
+        url: e.url,
+        status: e.status,
+        ts: e.started_at,
+      })),
+    };
+
+    return compiler.execute<T>(adapter, intention, args.args ?? {});
   }
 
   async close(): Promise<void> {

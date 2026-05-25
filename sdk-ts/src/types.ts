@@ -267,3 +267,65 @@ export interface HandoffSeamlessResult {
 }
 
 export type HandoffResult = HandoffPasteResult | HandoffSeamlessResult;
+
+// ----- Intention / Outcome types (M19 Phase B) -----
+
+export type FailureReason =
+  // State-machine reasons
+  | "unknown_site"
+  | "unknown_state"
+  | "no_path_to_target"
+  | "state_drift_mid_execution"
+  | "verify_failed"
+  // Step execution reasons
+  | "element_not_found"
+  | "element_not_interactive"
+  | "watchdog_rejected"
+  | "timeout"
+  // Network reasons
+  | "network_failure"
+  | "network_timeout"
+  | "network_throttled"
+  | "rate_limited"
+  // Site-side reasons
+  | "account_locked"
+  | "bot_challenge"
+  | "two_factor_required"
+  | "permission_denied"
+  | "content_not_found"
+  | "feature_unavailable"
+  // Human reasons
+  | "needs_human"
+  | "needs_credentials"
+  | "needs_2fa_code"
+  | "needs_payment_confirmation"
+  | "human_declined"
+  | "human_timeout"
+  // Engine reasons
+  | "engine_unsupported"
+  | "engine_crashed"
+  | "out_of_memory"
+  | "pool_exhausted"
+  // Unknown
+  | "unknown_error";
+
+export interface Evidence {
+  predicate: string;
+  passed: boolean;
+  observed_value?: unknown;
+}
+
+export interface Outcome<T = unknown> {
+  ok: boolean;
+  intention: string;
+  args: unknown;
+  state_before: string | null;
+  state_after?: string;
+  result?: T;
+  evidence: Evidence[];
+  duration_ms: number;
+  reason?: FailureReason;
+  reason_detail?: string;
+  recovery_options?: Array<{ label: string; intention?: string; needs_human?: boolean }>;
+  steps_observed: unknown[];  // opaque to SDK consumers in Phase B
+}

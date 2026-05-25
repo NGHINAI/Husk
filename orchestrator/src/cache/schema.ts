@@ -4,7 +4,7 @@ import type { Database } from "better-sqlite3";
  * Current schema version. Bump and add a migration block to applySchema
  * whenever a column changes.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Apply the Husk site-graph SQLite schema to a database connection.
@@ -120,6 +120,27 @@ export function applySchema(db: Database): void {
       acquired_at INTEGER NOT NULL,
       expires_at  INTEGER NOT NULL
     );
+  `);
+
+  // M19 / schema version 4: cognition_intentions table for intention compiler.
+  // CREATE TABLE IF NOT EXISTS is idempotent — safe on existing DBs.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cognition_intentions (
+      site         TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      args_schema  TEXT NOT NULL DEFAULT '{}',
+      requires_state TEXT,
+      steps_json   TEXT NOT NULL,
+      verify_json  TEXT NOT NULL DEFAULT '[]',
+      failure_modes_json TEXT NOT NULL DEFAULT '[]',
+      description  TEXT,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL,
+      PRIMARY KEY (site, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cognition_intentions_site
+      ON cognition_intentions (site);
   `);
 
   // Record / verify schema version in schema_meta table

@@ -11,6 +11,7 @@ import type {
   PaginateResult,
   HandoffPasteResult,
   HandoffSeamlessResult,
+  Outcome,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -204,6 +205,30 @@ export class Session {
     note?: string;
   }): Promise<{ ok: true; kind: "question" | "handoff" } | { ok: false; reason: "unknown_token" }> {
     return await this.client.call("resume", input);
+  }
+
+  /**
+   * Execute a named intention against the current page state.
+   *
+   * The orchestrator resolves the intention from the site's intention graph,
+   * plans a path through the state graph, executes each transition's action
+   * sequence, runs verify predicates, and returns an Outcome envelope.
+   *
+   * @param args.intention_name  Name of the intention to execute (e.g. "visit_b").
+   * @param args.args            Optional key-value arguments interpolated into steps.
+   * @param args.site            Override site key (defaults to current URL hostname).
+   */
+  async intend<T = unknown>(args: {
+    intention_name: string;
+    args?: Record<string, unknown>;
+    site?: string;
+  }): Promise<Outcome<T>> {
+    return await this.client.call<Outcome<T>>("intend", {
+      session_id: this.id,
+      intention_name: args.intention_name,
+      args: args.args,
+      site: args.site,
+    });
   }
 
   async close(): Promise<void> {

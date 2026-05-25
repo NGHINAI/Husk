@@ -1,10 +1,10 @@
 """Per-session async API for Husk."""
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from ._transport import JsonRpcClient
-from ._types import ActionResult, Snapshot, parse_action_result, parse_snapshot
+from ._types import ActionResult, Outcome, Snapshot, parse_action_result, parse_snapshot
 
 WaitForResult = dict[str, Any]
 
@@ -445,6 +445,33 @@ class Session:
         if note is not None:
             params["note"] = note
         return await self._client.call("resume", params)
+
+    async def intend(
+        self,
+        *,
+        intention_name: str,
+        args: Optional[Dict[str, Any]] = None,
+        site: Optional[str] = None,
+    ) -> Outcome:
+        """Execute a named intention against the current page state.
+
+        The orchestrator resolves the intention from the site's intention graph,
+        plans a path through the state graph, executes each transition's action
+        sequence, runs verify predicates, and returns an Outcome envelope.
+
+        :param intention_name: Name of the intention to execute (e.g. "visit_b").
+        :param args:           Optional key-value arguments interpolated into steps.
+        :param site:           Override site key (defaults to current URL hostname).
+        """
+        params: Dict[str, Any] = {
+            "session_id": self._id,
+            "intention_name": intention_name,
+            "args": args or {},
+        }
+        if site is not None:
+            params["site"] = site
+        raw = await self._client.call("intend", params)
+        return Outcome.from_json(raw)
 
     async def close(self) -> None:
         await self._client.call("close_session", {"session_id": self._id})
