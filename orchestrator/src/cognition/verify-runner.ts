@@ -1,6 +1,7 @@
 import type { VerifyCheck, Evidence, RetryOptions } from "./intention-types.js";
 import { evaluate, collectAllText } from "./predicate.js";
 import type { SnapshotForPredicate } from "./predicate.js";
+import { findAxNode, readAxBool } from "./ax-state.js";
 
 export interface NetworkEntry {
   method: string;
@@ -42,7 +43,34 @@ function evalTextPresent(check: VerifyCheck & { type: "text_present" | "text_abs
   };
 }
 
+function evalAxState(check: VerifyCheck & { type: "ax_state" }, ctx: VerifyContext): Evidence {
+  const node = findAxNode(ctx.snapshot.root, check.role, check.name);
+  if (!node) {
+    return {
+      predicate: check.description,
+      passed: false,
+      observed_value: { reason: "node_not_found", role: check.role, name: check.name },
+      ts: Date.now(),
+      source: "ax",
+      severity: "block",
+    };
+  }
+  const actual = readAxBool(node, check.state);
+  const expected = check.expected ?? true;
+  return {
+    predicate: check.description,
+    passed: actual === expected,
+    observed_value: { state: check.state, actual, expected },
+    ts: Date.now(),
+    source: "ax",
+    severity: "block",
+  };
+}
+
 export function runVerify(check: VerifyCheck, ctx: VerifyContext): Evidence {
+  if (check.type === "ax_state") {
+    return evalAxState(check, ctx);
+  }
   if (check.type === "text_present" || check.type === "text_absent") {
     return evalTextPresent(check, ctx);
   }

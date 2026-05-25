@@ -46,6 +46,18 @@ export type VerifyCheck =
       pattern: string;
       description: string;
       retry?: RetryOptions;
+    }
+  | {
+      type: "ax_state";
+      role: string;
+      /** Exact match on accessible name (case-insensitive). When omitted, matches any. */
+      name?: string;
+      /** State name to check (e.g., "disabled", "checked"). */
+      state: string;
+      /** Expected value (defaults to true). */
+      expected?: boolean;
+      description: string;
+      retry?: RetryOptions;
     };
 
 /** A pattern matched against a runtime error to classify failure into a typed reason. */

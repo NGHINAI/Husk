@@ -22,6 +22,12 @@ import type { Predicate } from "./types.js";
 // SnapshotForPredicate — minimal subset of the M14 Snapshot shape
 // ---------------------------------------------------------------------------
 
+/** A single AX property — name + value. Matches CDP Accessibility.AXProperty shape. */
+export interface AxState {
+  name: string; // "disabled" | "checked" | "expanded" | "selected" | "focused" | "required" | ...
+  value?: { type?: string; value?: unknown };
+}
+
 /** A single node in the compressed AX tree (matches SnapshotNode from M14). */
 export interface AxTreeNode {
   /** Stable ID */
@@ -32,6 +38,8 @@ export interface AxTreeNode {
   n: string;
   /** Children */
   c?: AxTreeNode[];
+  /** AX state properties (optional — may be absent in synthetic snapshots). */
+  s?: AxState[];
 }
 
 /**
