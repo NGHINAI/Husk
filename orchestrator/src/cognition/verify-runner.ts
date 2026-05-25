@@ -1,4 +1,4 @@
-import type { VerifyCheck, Evidence } from "./intention-types.js";
+import type { VerifyCheck, Evidence, RetryOptions } from "./intention-types.js";
 import { evaluate, collectAllText } from "./predicate.js";
 import type { SnapshotForPredicate } from "./predicate.js";
 
@@ -79,4 +79,80 @@ export function runVerify(check: VerifyCheck, ctx: VerifyContext): Evidence {
 
 export function runAllVerify(checks: VerifyCheck[], ctx: VerifyContext): Evidence[] {
   return checks.map((c) => runVerify(c, ctx));
+}
+
+// Default retry budget when a check declares retry: {} with no fields.
+const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_INTERVAL_MS = 250;
+const DEFAULT_MAX_ATTEMPTS = 20;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Run a verify check with retry-until-pass semantics.
+ *
+ * Continues polling until any of:
+ *   - the check passes (returns the passing Evidence with attempts counter)
+ *   - timeout_ms elapsed
+ *   - max_attempts reached
+ *
+ * The contextFactory is called fresh each attempt — pass a function that
+ * re-snapshots / re-collects network state so polling sees the latest data.
+ *
+ * If neither check.retry nor options is provided, falls back to single-shot
+ * (calls runVerify once) without annotating attempts.
+ */
+export async function runVerifyWithRetry(
+  check: VerifyCheck,
+  contextFactory: () => Promise<VerifyContext>,
+  options?: RetryOptions,
+): Promise<Evidence> {
+  const retryConfig = check.retry ?? options;
+  if (!retryConfig) {
+    // No retry policy — fall back to single-shot (no attempts annotation).
+    const ctx = await contextFactory();
+    return runVerify(check, ctx);
+  }
+
+  const timeout = retryConfig.timeout_ms ?? DEFAULT_TIMEOUT_MS;
+  const interval = retryConfig.interval_ms ?? DEFAULT_INTERVAL_MS;
+  const maxAttempts = retryConfig.max_attempts ?? DEFAULT_MAX_ATTEMPTS;
+
+  const start = Date.now();
+  let attempts = 0;
+  let lastEv: Evidence | null = null;
+
+  while (true) {
+    attempts++;
+    const ctx = await contextFactory();
+    const ev = runVerify(check, ctx);
+    lastEv = ev;
+    if (ev.passed) {
+      return { ...ev, attempts, ts: Date.now() };
+    }
+    if (attempts >= maxAttempts) break;
+    if (Date.now() - start + interval >= timeout) break;
+    await sleep(interval);
+  }
+
+  // Exhausted: return last result with attempts annotation.
+  return { ...(lastEv as Evidence), attempts, ts: Date.now() };
+}
+
+/**
+ * Run all verify checks with retry semantics (serial — each check uses the
+ * full retry budget independently). contextFactory is called fresh per attempt
+ * of each check.
+ */
+export async function runAllVerifyWithRetry(
+  checks: VerifyCheck[],
+  contextFactory: () => Promise<VerifyContext>,
+): Promise<Evidence[]> {
+  const evidence: Evidence[] = [];
+  for (const c of checks) {
+    evidence.push(await runVerifyWithRetry(c, contextFactory));
+  }
+  return evidence;
 }
