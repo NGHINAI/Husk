@@ -6,3 +6,6 @@ export type {
   ActionStep,
   Observation,
 } from "./types.js";
+
+export type { SnapshotForPredicate, AxTreeNode } from "./predicate.js";
+export { evaluate } from "./predicate.js";
