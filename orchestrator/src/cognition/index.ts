@@ -11,3 +11,4 @@ export type { SnapshotForPredicate, AxTreeNode } from "./predicate.js";
 export { evaluate } from "./predicate.js";
 
 export { StateGraph } from "./state-graph.js";
+export { CognitionStorage } from "./storage.js";
