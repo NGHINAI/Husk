@@ -5,6 +5,8 @@
  * Do not rename or restructure without updating all consumers.
  */
 
+import type { Evidence } from "./intention-types.js";
+
 /** Unique identifier for a site-state. Format: "site::state_name" */
 export type StateId = string; // e.g. "linkedin.com::home_feed"
 
@@ -91,4 +93,8 @@ export interface Observation {
   snapshot_summary: string;
   /** The action that produced this observation; null at session start */
   action_taken: ActionStep | null;
+  /** When the observation was triggered by an intention (Phase D). */
+  intention_name?: string;
+  /** Evidence collected during the intention run (Phase D). */
+  evidence?: Evidence[];
 }
