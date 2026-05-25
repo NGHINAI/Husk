@@ -27,11 +27,23 @@ export class SiteGraphCache {
   private readonly connections = new Map<string, Database.Database>();
   private closed = false;
 
+  /**
+   * Shared database for cognition tables (state graphs, transitions,
+   * observations, exploration locks). Lives at `{cacheDir}/_cognition.db`.
+   * Initialized on construction — all 4 M18 tables are created here so
+   * downstream consumers (CognitionStorage, T3-T6) can access them via
+   * `cache.db` without needing a domain.
+   */
+  readonly db: Database.Database;
+
   constructor(config: SiteGraphConfig) {
     this.cacheDir = config.cacheDir;
     if (!existsSync(this.cacheDir)) {
       mkdirSync(this.cacheDir, { recursive: true });
     }
+    // Open the shared cognition DB immediately; applySchema creates all tables.
+    this.db = new Database(join(this.cacheDir, "_cognition.db"));
+    applySchema(this.db);
   }
 
   /**
@@ -195,13 +207,14 @@ export class SiteGraphCache {
     return row.success_count / total;
   }
 
-  /** Close all open per-domain databases. Idempotent. */
+  /** Close all open per-domain databases and the shared cognition DB. Idempotent. */
   close(): void {
     if (this.closed) return;
     for (const db of this.connections.values()) {
       db.close();
     }
     this.connections.clear();
+    this.db.close();
     this.closed = true;
   }
 
