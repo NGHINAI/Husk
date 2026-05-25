@@ -299,6 +299,34 @@ export const TOOL_SURFACE: ToolSpec[] = [
     },
   },
   {
+    name: "husk_inspect",
+    description: `husk_inspect — Read-only introspection of the current page.
+
+MODES:
+- "full"     → returns a complete snapshot envelope (AX tree, network buffer, forms, metadata, page summary). Use when you need everything.
+- "diff"     → returns the change since the previous snapshot for this session (cheaper for incremental observation).
+
+This tool never mutates the page. Pairs with husk_intend (which acts) and husk_subscribe (which pushes events).
+
+To resolve an intent to a stable_id, use husk_intend with verb mode — it internally calls the find layer. There is no standalone find tool in v0.1.
+
+Example:
+husk_inspect({session_id, mode: "full"})
+husk_inspect({session_id, mode: "diff", since_signature: "<prev>"})
+`,
+    inputSchema: {
+      type: "object",
+      required: ["session_id", "mode"],
+      properties: {
+        session_id: { type: "string" },
+        mode: { type: "string", enum: ["full", "diff"] },
+        since_signature: { type: "string", description: "Required when mode=diff. Snapshot signature from a previous full snapshot." },
+        include_image: { type: "boolean", description: "When mode=full, include screenshot bytes (base64)." },
+        visible_only: { type: "boolean", description: "When mode=full, restrict AX tree to in-viewport nodes." },
+      },
+    },
+  },
+  {
     name: "husk_subscribe",
     description: `husk_subscribe — Subscribe to events from a session or site.
 
@@ -424,6 +452,28 @@ export async function handleToolCall(
   if (toolName === "husk_version") {
     return { name: "husk-mcp", version: VERSION };
   }
+
+  if (toolName === "husk_inspect") {
+    switch (args.mode) {
+      case "full":
+        return await client.call("snapshot", {
+          session_id: args.session_id,
+          include_image: args.include_image,
+          visible_only: args.visible_only,
+        });
+      case "diff":
+        if (!args.since_signature) {
+          throw new Error("husk_inspect mode=diff requires since_signature");
+        }
+        return await client.call("snapshot_diff", {
+          session_id: args.session_id,
+          since_signature: args.since_signature,
+        });
+      default:
+        throw new Error(`husk_inspect: invalid mode "${String(args.mode)}"`);
+    }
+  }
+
   const method = RPC_MAP[toolName];
   if (!method) throw new Error(`Unknown tool: ${toolName}`);
   return await client.call(method, args);
