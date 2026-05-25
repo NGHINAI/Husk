@@ -299,6 +299,39 @@ export const TOOL_SURFACE: ToolSpec[] = [
     },
   },
   {
+    name: "husk_subscribe",
+    description: `husk_subscribe — Subscribe to events from a session or site.
+
+Returns { subscription_id, stream_url }. Agent opens SSE at <orchestrator>/stream/cognition?subscription_id=... to receive events. SDK wraps this; MCP-only consumers must open the SSE stream themselves.
+
+EVENT TYPES:
+- state_change — fires when current page state transitions (cognition layer)
+- network_idle — fires after the page has been quiet for debounce_ms (default 500)
+- error_appeared — banner/console/dialog error detected
+- captcha_detected — captcha or bot-challenge markers spotted
+- user_intervention_required — session paused for ask_human or handoff
+
+FILTERS:
+- session_id (use "*" for all sessions)
+- site (hostname)
+- debounce_ms (per-subscription coalescing window)
+
+Example:
+husk_subscribe({event_type: "state_change", session_id: "abc", debounce_ms: 200})
+→ {subscription_id: "...", stream_url: "/stream/cognition?subscription_id=..."}
+`,
+    inputSchema: {
+      type: "object",
+      required: ["event_type"],
+      properties: {
+        event_type: { type: "string", enum: ["state_change", "network_idle", "error_appeared", "captcha_detected", "user_intervention_required"] },
+        session_id: { type: "string" },
+        site: { type: "string" },
+        debounce_ms: { type: "integer", minimum: 0 },
+      },
+    },
+  },
+  {
     name: "husk_ask_human",
     description: "husk_ask_human — Ask the human a question (non-blocking; broadcasts to chat AND the Watch UI).\n\nWHEN TO USE: When you genuinely need a human decision — multiple matches with no clear winner, missing context the user has but you don't (which receipt? which address?), confirmation before a destructive action. NOT for things you can figure out yourself.\n\nWHAT YOU GET: Returns IMMEDIATELY with {pending: true, token, watch_url, surface: {question, options?}}. Your job: take the `surface` fields and ask the user in your NEXT chat message naturally. The Watch UI also shows the question with answer buttons. Whichever surface answers first wins.\n\nAFTER THE USER ANSWERS:\n- If they answer in CHAT: you already have the answer — just proceed with it. Optional: call husk_resume({token, answer}) to record it in session_history for audit.\n- If they answer in the WATCH UI: their answer is recorded server-side. You can pick it up in the next snapshot's session_history if you need to.\n\nDO NOT: Use as a fallback for 'I'm confused' — try harder first. Every question costs the user attention. Don't ask consecutively when one question covers it.\n\nParams: session_id (string), question (string — write it as you'd say it), options? (string[] — for multiple choice; omit for free-form text), timeout_ms? (default 300000).",
     inputSchema: {
@@ -375,6 +408,7 @@ const RPC_MAP: Record<string, string> = {
   husk_batch_visit: "batch_visit",
   husk_wait_for: "wait_for",
   husk_upload: "upload",
+  husk_subscribe: "subscribe",
   husk_ask_human: "ask_human",
   husk_handoff: "handoff",
   husk_resume: "resume",
