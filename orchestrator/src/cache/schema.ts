@@ -4,7 +4,7 @@ import type { Database } from "better-sqlite3";
  * Current schema version. Bump and add a migration block to applySchema
  * whenever a column changes.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Apply the Husk site-graph SQLite schema to a database connection.
@@ -108,7 +108,9 @@ export function applySchema(db: Database): void {
       current_state    TEXT NOT NULL,
       url              TEXT NOT NULL,
       snapshot_summary TEXT,
-      action_taken     TEXT
+      action_taken     TEXT,
+      intention_name   TEXT,
+      evidence_json    TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_cognition_observations_site_ts
       ON cognition_observations(site, ts);
@@ -142,6 +144,17 @@ export function applySchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_cognition_intentions_site
       ON cognition_intentions (site);
   `);
+
+  // M21 / schema version 5: add intention_name + evidence_json to cognition_observations.
+  // ALTER TABLE ADD COLUMN is safe on existing DBs — wrap in try/catch to handle
+  // "duplicate column name" errors when columns already exist (idempotent migration).
+  for (const colDef of ["intention_name TEXT", "evidence_json TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE cognition_observations ADD COLUMN ${colDef}`);
+    } catch {
+      // Column already exists — safe to ignore.
+    }
+  }
 
   // Record / verify schema version in schema_meta table
   const existing = db

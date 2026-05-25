@@ -33,6 +33,8 @@ import { resolveIntentRef } from "./intent-resolver.js";
 import type { FindContext } from "../session/find.js";
 import { classifyError, recoveryStrategy } from "./failure-taxonomy.js";
 import { interpolate } from "./intention-yaml.js";
+import type { CognitionStorage } from "./storage.js";
+import { linkOutcomeToObservation } from "./observation-link.js";
 
 // ---------------------------------------------------------------------------
 // SessionAdapter — minimal interface the compiler needs.
@@ -54,6 +56,8 @@ export interface SessionAdapter {
 export interface CompilerOptions {
   graph: StateGraph;
   site: string;
+  /** When set, outcomes get logged to cognition_observations (Phase D). */
+  storage?: CognitionStorage;
   /** Optional clock override for testing. */
   now?: () => number;
 }
@@ -67,11 +71,13 @@ export class IntentionCompiler {
   // site is retained for future use (T8 Session.intend wires it in)
   readonly site: string;
   private readonly now: () => number;
+  private readonly storage: CognitionStorage | undefined;
 
   constructor(opts: CompilerOptions) {
     this.graph = opts.graph;
     this.site = opts.site;
     this.now = opts.now ?? (() => Date.now());
+    this.storage = opts.storage;
   }
 
   async execute<T = unknown>(
@@ -96,23 +102,23 @@ export class IntentionCompiler {
         const target = interpolate(intention.requires_state, args);
 
         if (!state_before) {
-          return this.failOutcome(
+          return this.finishOutcome(this.failOutcome(
             intention, args, null, undefined,
             "unknown_state",
             "no current state matched",
             [], steps_observed, t0,
-          );
+          ), session, intention);
         }
 
         if (state_before !== target) {
           const path = this.graph.findPath(state_before, target);
           if (!path) {
-            return this.failOutcome(
+            return this.finishOutcome(this.failOutcome(
               intention, args, state_before, undefined,
               "no_path_to_target",
               `no path from ${state_before} to ${target}`,
               [], steps_observed, t0,
-            );
+            ), session, intention);
           }
 
           for (const transition of path) {
@@ -136,13 +142,13 @@ export class IntentionCompiler {
             });
 
             if (!arrived) {
-              return this.failOutcome(
+              return this.finishOutcome(this.failOutcome(
                 intention, args, state_before,
                 postState?.state.state_id,
                 "state_drift_mid_execution",
                 `expected ${transition.to_state}, saw ${postState?.state.state_id ?? "unknown"}`,
                 [], steps_observed, t0,
-              );
+              ), session, intention);
             }
           }
         }
@@ -195,12 +201,12 @@ export class IntentionCompiler {
           // we already know we're failing; no need to re-poll verify).
           const fmVerifyCtx = ctxSingleShot ?? (await verifyCtxFactory());
           const evidence = runAllVerify(intention.verify, fmVerifyCtx);
-          return this.failOutcome(
+          return this.finishOutcome(this.failOutcome(
             intention, args, state_before, undefined,
             fm.reason,
             `failure_mode matched: ${fm.match.description}`,
             evidence, steps_observed, t0,
-          );
+          ), session, intention);
         }
       }
 
@@ -211,18 +217,18 @@ export class IntentionCompiler {
       const allPassed = evidence.every((e) => e.passed);
 
       if (!allPassed) {
-        return this.failOutcome(
+        return this.finishOutcome(this.failOutcome(
           intention, args, state_before, undefined,
           "verify_failed",
           "one or more verify checks failed",
           evidence, steps_observed, t0,
-        );
+        ), session, intention);
       }
 
       // Step 7: identify final state.
       const finalState = this.graph.identifyCurrentState(this.adapt(snap, url));
 
-      return {
+      return this.finishOutcome({
         ok: true,
         intention: intention.name,
         args,
@@ -231,15 +237,15 @@ export class IntentionCompiler {
         evidence,
         duration_ms: this.now() - t0,
         steps_observed,
-      };
+      }, session, intention);
 
     } catch (err) {
       const { reason, detail } = classifyError(err);
-      return this.failOutcome(
+      return this.finishOutcome(this.failOutcome(
         intention, args, state_before, undefined,
         reason, detail,
         [], steps_observed, t0,
-      );
+      ), session, intention);
     }
   }
 
@@ -385,6 +391,40 @@ export class IntentionCompiler {
       for (const child of node.c ?? []) stack.push(child);
     }
     return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // finishOutcome — append capability info note (Phase D T5) + log observation.
+  // Observation logging MUST NOT throw; it is wrapped in try/catch.
+  // ---------------------------------------------------------------------------
+
+  private finishOutcome<T = unknown>(
+    outcome: Outcome<T>,
+    session: SessionAdapter,
+    intention?: Intention,
+  ): Outcome<T> {
+    // Phase D T5: if the intention declares a capability, append an info Evidence
+    // note. This is purely informational — the router has already done its job at
+    // session-create / acquire time. Full mid-intention engine swap is deferred.
+    if (intention?.capability) {
+      const capNote: Evidence = {
+        predicate: `intention declares capability: ${JSON.stringify(intention.capability)}`,
+        passed: true,
+        source: "predicate",
+        severity: "info",
+        ts: Date.now(),
+      };
+      (outcome.evidence as Evidence[]).push(capNote);
+    }
+
+    if (this.storage) {
+      try {
+        linkOutcomeToObservation(this.storage, this.site, session.currentUrl(), outcome as Outcome);
+      } catch {
+        // Observation logging must never break the intention.
+      }
+    }
+    return outcome;
   }
 
   // ---------------------------------------------------------------------------

@@ -268,6 +268,26 @@ export interface HandoffSeamlessResult {
 
 export type HandoffResult = HandoffPasteResult | HandoffSeamlessResult;
 
+// ----- Capability types (M21 Phase D) -----
+
+/**
+ * Declares what an intention or session needs from an engine.
+ * Mirrors orchestrator/src/engine/capability-types.ts — kept in sync by tests,
+ * not via shared imports.
+ */
+export interface CapabilityRequirement {
+  /** Minimum JS execution level. Defaults to "basic" when omitted. */
+  js?: "none" | "basic" | "full";
+  /** Feature flags the task requires (e.g. "webrtc", "service_worker"). */
+  features?: string[];
+  /** Domains the engine must already have authenticated session cookies for. */
+  cookies_for?: string[];
+  /** Maximum acceptable latency class. Engines slower than this are rejected. */
+  max_latency?: "fast" | "medium" | "slow";
+  /** Soft preference for engines on this list when scores tie. */
+  prefer_engines?: string[];
+}
+
 // ----- Intention / Outcome types (M19 Phase B) -----
 
 export type FailureReason =

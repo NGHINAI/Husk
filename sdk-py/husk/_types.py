@@ -6,7 +6,7 @@ not via shared imports (the SDK has no orchestrator dependency).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Optional, Sequence, Union
+from typing import Any, List, Literal, Mapping, Optional, Sequence, Union
 
 
 Verb = Literal["click", "type", "scroll", "press_key"]
@@ -171,6 +171,22 @@ def parse_action_result(d: Mapping[str, Any]) -> ActionResult:
         snapshot_at_attempt=parse_snapshot(d["snapshot_at_attempt"]),
         message=d.get("message"),
     )
+
+
+# ----- Capability types (M21 Phase D) -----
+
+@dataclass
+class CapabilityRequirement:
+    """Declares what an intention or session needs from an engine.
+
+    Mirrors orchestrator/src/engine/capability-types.ts — kept in sync by tests,
+    not via shared imports.
+    """
+    js: Optional[Literal["none", "basic", "full"]] = None
+    features: Optional[List[str]] = None
+    cookies_for: Optional[List[str]] = None
+    max_latency: Optional[Literal["fast", "medium", "slow"]] = None
+    prefer_engines: Optional[List[str]] = None
 
 
 # ----- Intention / Outcome types (M19 Phase B) -----

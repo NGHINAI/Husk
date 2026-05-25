@@ -150,8 +150,9 @@ export class CognitionStorage {
     this.db
       .prepare(
         `INSERT INTO cognition_observations
-           (site, ts, prev_state, current_state, url, snapshot_summary, action_taken)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (site, ts, prev_state, current_state, url, snapshot_summary, action_taken,
+            intention_name, evidence_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         o.site,
@@ -161,6 +162,8 @@ export class CognitionStorage {
         o.url,
         o.snapshot_summary,
         o.action_taken ? JSON.stringify(o.action_taken) : null,
+        o.intention_name ?? null,
+        o.evidence ? JSON.stringify(o.evidence) : null,
       );
   }
 
@@ -172,15 +175,27 @@ export class CognitionStorage {
          ORDER BY ts ASC`,
       )
       .all(site, since_ts)
-      .map((r: any) => ({
-        site: r.site,
-        ts: r.ts,
-        prev_state: r.prev_state,
-        current_state: r.current_state,
-        url: r.url,
-        snapshot_summary: r.snapshot_summary,
-        action_taken: r.action_taken ? JSON.parse(r.action_taken) : null,
-      }));
+      .map((r: any) => {
+        let evidence: import("./intention-types.js").Evidence[] | undefined;
+        if (r.evidence_json) {
+          try {
+            evidence = JSON.parse(r.evidence_json) as import("./intention-types.js").Evidence[];
+          } catch {
+            evidence = [];
+          }
+        }
+        return {
+          site: r.site,
+          ts: r.ts,
+          prev_state: r.prev_state,
+          current_state: r.current_state,
+          url: r.url,
+          snapshot_summary: r.snapshot_summary,
+          action_taken: r.action_taken ? JSON.parse(r.action_taken) : null,
+          intention_name: r.intention_name ?? undefined,
+          evidence,
+        } satisfies Observation;
+      });
   }
 
   // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import type { Predicate, ActionStep, StateId } from "./types.js";
+import type { CapabilityRequirement } from "../engine/capability-types.js";
 
 /** Retry policy for a verify check. */
 export interface RetryOptions {
@@ -46,6 +47,18 @@ export type VerifyCheck =
       pattern: string;
       description: string;
       retry?: RetryOptions;
+    }
+  | {
+      type: "ax_state";
+      role: string;
+      /** Exact match on accessible name (case-insensitive). When omitted, matches any. */
+      name?: string;
+      /** State name to check (e.g., "disabled", "checked"). */
+      state: string;
+      /** Expected value (defaults to true). */
+      expected?: boolean;
+      description: string;
+      retry?: RetryOptions;
     };
 
 /** A pattern matched against a runtime error to classify failure into a typed reason. */
@@ -86,6 +99,13 @@ export interface Intention {
   failure_modes: FailureModePattern[];
   /** Optional comment for humans reading the YAML. */
   description?: string;
+  /**
+   * Optional capability requirement (Phase D M21).
+   * Declares what the engine must offer to execute this intention.
+   * Best-effort: compiler appends an info Evidence note; full mid-intention
+   * engine swap is deferred to a future milestone.
+   */
+  capability?: CapabilityRequirement;
   created_at: number;
   updated_at: number;
 }

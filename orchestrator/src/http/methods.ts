@@ -10,6 +10,9 @@ import type { PaginateOpts } from "../session/paginate.js";
 import type { HumanIOBus } from "../hitl/bus.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { ChromePool } from "../engine/chrome-pool.js";
+import type { CapabilityRequirement } from "../engine/capability-types.js";
+import { pickEngine } from "../engine/capability-router.js";
+import { ALL_ENGINES } from "../engine/engine-capabilities.js";
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -78,13 +81,28 @@ export const METHODS = {
   },
 
   async create_session(
-    params: { profile?: string; parent_session_id?: string; engine?: "lightpanda" | "chrome" | "auto" } | undefined,
+    params: { profile?: string; parent_session_id?: string; engine?: "lightpanda" | "chrome" | "auto"; capability?: CapabilityRequirement } | undefined,
     ctx: MethodContext
-  ): Promise<CreateSessionResult> {
+  ): Promise<CreateSessionResult | { ok: false; reason: "engine_unsupported"; detail: string }> {
+    // Phase D M21: when capability is supplied, pre-resolve it to a concrete engine kind.
+    // If no engine satisfies the requirement, return engine_unsupported.
+    let resolvedEngine: "lightpanda" | "chrome" | "auto" | undefined = params?.engine ?? "auto";
+    if (params?.capability) {
+      const engineName = pickEngine(ALL_ENGINES, params.capability);
+      if (!engineName) {
+        return {
+          ok: false,
+          reason: "engine_unsupported",
+          detail: "no available engine satisfies the requested capability requirement",
+        };
+      }
+      resolvedEngine = engineName as "lightpanda" | "chrome";
+    }
+
     const session_id = await ctx.sessions.create({
       profile: params?.profile,
       parent_session_id: params?.parent_session_id,
-      engine: params?.engine ?? "auto",
+      engine: resolvedEngine,
     });
     const watch_url =
       ctx.host === "127.0.0.1" && ctx.portRef != null
@@ -872,6 +890,8 @@ export const METHODS = {
       intention_name: string;
       args?: Record<string, unknown>;
       site?: string;
+      /** Optional capability declaration (Phase D M21). Plumbed through for future enforcement. */
+      capability?: CapabilityRequirement;
     },
     ctx: MethodContext,
   ) {

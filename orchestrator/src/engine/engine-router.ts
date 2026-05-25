@@ -21,6 +21,9 @@
  */
 
 import type { ChromePool } from "./chrome-pool.js";
+import type { CapabilityRequirement } from "./capability-types.js";
+import { pickEngine } from "./capability-router.js";
+import { ALL_ENGINES } from "./engine-capabilities.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -68,6 +71,15 @@ export interface EngineRouter {
    * goto (in Session, not here).
    */
   acquire(kind: EngineKind, sessionId: string): Promise<EngineHandle>;
+  /**
+   * Pick an engine that satisfies the capability requirement, then acquire it.
+   * Returns null when no registered engine matches the requirement.
+   */
+  acquireForCapability(
+    req: CapabilityRequirement,
+    sessionId: string,
+    cookieInventory?: Set<string>,
+  ): Promise<EngineHandle | null>;
   /** Shut down both pools. */
   close(): Promise<void>;
 }
@@ -79,7 +91,7 @@ export interface EngineRouter {
 export function createEngineRouter(opts: EngineRouterOpts): EngineRouter {
   const { lightpandaPool, chromePool } = opts;
 
-  return {
+  const router: EngineRouter = {
     async acquire(kind, sessionId) {
       if (kind === "chrome") {
         const handle = await chromePool.acquire(sessionId);
@@ -108,8 +120,16 @@ export function createEngineRouter(opts: EngineRouterOpts): EngineRouter {
       throw new Error(`Unknown engine kind: "${kind as string}"`);
     },
 
+    async acquireForCapability(req, sessionId, cookieInventory) {
+      const engineName = pickEngine(ALL_ENGINES, req, cookieInventory);
+      if (!engineName) return null;
+      return router.acquire(engineName as EngineKind, sessionId);
+    },
+
     async close() {
       await Promise.all([lightpandaPool.close(), chromePool.close()]);
     },
   };
+
+  return router;
 }
