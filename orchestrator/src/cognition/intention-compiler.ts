@@ -28,7 +28,7 @@ import type { ActionStep } from "./types.js";
 import type { StateGraph } from "./state-graph.js";
 import type { SnapshotForPredicate, AxTreeNode } from "./predicate.js";
 import type { VerifyContext, NetworkEntry } from "./verify-runner.js";
-import { runAllVerify, runVerify } from "./verify-runner.js";
+import { runAllVerify, runVerify, runVerifyWithRetry, runAllVerifyWithRetry } from "./verify-runner.js";
 import { resolveIntentRef } from "./intent-resolver.js";
 import type { FindContext } from "../session/find.js";
 import { classifyError, recoveryStrategy } from "./failure-taxonomy.js";
@@ -158,18 +158,43 @@ export class IntentionCompiler {
         url = session.currentUrl();
       }
 
-      // Step 4: build verify context.
-      const verifyCtx: VerifyContext = {
-        currentUrl: url,
-        snapshot: this.adapt(snap, url),
-        network: session.recentNetwork(),
+      // Step 4: build verify context factory. The factory re-snapshots each call
+      // so polling paths always see the latest browser state.
+      const verifyCtxFactory = async (): Promise<VerifyContext> => {
+        const fresh = await session.snapshot();
+        const freshUrl = session.currentUrl();
+        return {
+          currentUrl: freshUrl,
+          snapshot: this.adapt(fresh, freshUrl),
+          network: session.recentNetwork(),
+        };
       };
+
+      // Determine if any check wants retry polling (verify OR failure_modes).
+      const hasRetryOnVerify = intention.verify.some((c) => c.retry !== undefined);
+      const hasRetryOnFailureModes = intention.failure_modes.some((fm) => fm.match.retry !== undefined);
+      const anyRetry = hasRetryOnVerify || hasRetryOnFailureModes;
+
+      // For the single-shot path: capture ONE context from the last snap (no extra snapshot call).
+      // For the retry path: use the factory (may snapshot many times).
+      const ctxSingleShot: VerifyContext | null = anyRetry
+        ? null
+        : {
+            currentUrl: url,
+            snapshot: this.adapt(snap, url),
+            network: session.recentNetwork(),
+          };
 
       // Step 5: check failure_mode patterns BEFORE verify — catches rate-limit soft failures.
       for (const fm of intention.failure_modes) {
-        const ev = runVerify(fm.match, verifyCtx);
+        const ev = fm.match.retry
+          ? await runVerifyWithRetry(fm.match, verifyCtxFactory)
+          : runVerify(fm.match, ctxSingleShot!);
         if (ev.passed) {
-          const evidence = runAllVerify(intention.verify, verifyCtx);
+          // Collect verify evidence for the failure Outcome (single-shot is fine here —
+          // we already know we're failing; no need to re-poll verify).
+          const fmVerifyCtx = ctxSingleShot ?? (await verifyCtxFactory());
+          const evidence = runAllVerify(intention.verify, fmVerifyCtx);
           return this.failOutcome(
             intention, args, state_before, undefined,
             fm.reason,
@@ -180,7 +205,9 @@ export class IntentionCompiler {
       }
 
       // Step 6: run verify checks.
-      const evidence = runAllVerify(intention.verify, verifyCtx);
+      const evidence = hasRetryOnVerify
+        ? await runAllVerifyWithRetry(intention.verify, verifyCtxFactory)
+        : runAllVerify(intention.verify, ctxSingleShot!);
       const allPassed = evidence.every((e) => e.passed);
 
       if (!allPassed) {
