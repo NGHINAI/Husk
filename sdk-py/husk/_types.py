@@ -221,6 +221,10 @@ class Evidence:
     predicate: str
     passed: bool
     observed_value: Any = None
+    ts: Optional[int] = None
+    source: Optional[Literal["url", "network", "ax", "predicate", "text"]] = None
+    severity: Optional[Literal["info", "warn", "block"]] = None
+    attempts: Optional[int] = None
 
 
 @dataclass
@@ -247,7 +251,18 @@ class Outcome:
             state_before=d.get("state_before"),
             state_after=d.get("state_after"),
             result=d.get("result"),
-            evidence=[Evidence(**e) for e in d.get("evidence", [])],
+            evidence=[
+                Evidence(
+                    predicate=e["predicate"],
+                    passed=e["passed"],
+                    observed_value=e.get("observed_value"),
+                    ts=e.get("ts"),
+                    source=e.get("source"),
+                    severity=e.get("severity"),
+                    attempts=e.get("attempts"),
+                )
+                for e in d.get("evidence", [])
+            ],
             duration_ms=d.get("duration_ms", 0),
             reason=d.get("reason"),
             reason_detail=d.get("reason_detail"),

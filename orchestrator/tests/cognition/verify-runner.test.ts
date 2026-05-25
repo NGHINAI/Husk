@@ -9,12 +9,16 @@ describe("verify-runner", () => {
     const check: VerifyCheck = { type: "url", pattern: "/page$", description: "URL ends with /page" };
     const ev = runVerify(check, { currentUrl: "https://test.com/page", snapshot: { url: "https://test.com/page", root: undefined } as any });
     expect(ev.passed).toBe(true);
+    expect(ev.source).toBe("url");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("url check fails on mismatch", () => {
     const check: VerifyCheck = { type: "url", pattern: "/admin", description: "admin url" };
     const ev = runVerify(check, { currentUrl: "https://test.com/page", snapshot: { url: "x", root: undefined } as any });
     expect(ev.passed).toBe(false);
+    expect(ev.source).toBe("url");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("network check matches by url_pattern + method + status", () => {
@@ -28,6 +32,8 @@ describe("verify-runner", () => {
     });
     expect(ev.passed).toBe(true);
     expect(ev.observed_value).toBeDefined();
+    expect(ev.source).toBe("network");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("network check fails when status outside range", () => {
@@ -38,12 +44,16 @@ describe("verify-runner", () => {
       network: [{ method: "GET", url: "/api", status: 429, ts: 1 }],
     });
     expect(ev.passed).toBe(false);
+    expect(ev.source).toBe("network");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("network check fails when no network ctx provided", () => {
     const check: VerifyCheck = { type: "network", url_pattern: "/api", description: "any" };
     const ev = runVerify(check, { currentUrl: "x", snapshot: { url: "x", root: undefined } as any });
     expect(ev.passed).toBe(false);
+    expect(ev.source).toBe("network");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("predicate check uses predicate evaluator", () => {
@@ -57,6 +67,8 @@ describe("verify-runner", () => {
       snapshot: { url: "https://x/page", root: { r: "main", c: [] } } as any,
     });
     expect(ev.passed).toBe(true);
+    expect(ev.source).toBe("predicate");
+    expect(ev.ts).toBeGreaterThan(0);
   });
 
   it("runAllVerify returns one Evidence per check", () => {

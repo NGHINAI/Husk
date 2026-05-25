@@ -313,6 +313,14 @@ export interface Evidence {
   predicate: string;
   passed: boolean;
   observed_value?: unknown;
+  /** Unix ms when this check ran (or the last attempt if polled). */
+  ts?: number;
+  /** Where the data came from: which subsystem produced it. */
+  source?: "url" | "network" | "ax" | "predicate" | "text";
+  /** Severity tag — defaults to "block" for hard verify; "warn" for softer signals. */
+  severity?: "info" | "warn" | "block";
+  /** When retrying, how many attempts were made. Absent for single-shot. */
+  attempts?: number;
 }
 
 export interface Outcome<T = unknown> {

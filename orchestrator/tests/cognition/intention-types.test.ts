@@ -49,4 +49,35 @@ describe("intention types", () => {
     ];
     expect(reasons.length).toBe(30);
   });
+
+  it("VerifyCheck supports text_present and text_absent", () => {
+    const checks: VerifyCheck[] = [
+      { type: "text_present", pattern: "Success", description: "shows success" },
+      { type: "text_absent", pattern: "Error", description: "no error" },
+    ];
+    expect(checks).toHaveLength(2);
+  });
+
+  it("VerifyCheck supports retry options on all types", () => {
+    const c: VerifyCheck = {
+      type: "url",
+      pattern: "/done",
+      description: "wait for /done",
+      retry: { timeout_ms: 3000, interval_ms: 200, max_attempts: 15 },
+    };
+    expect(c.retry?.timeout_ms).toBe(3000);
+  });
+
+  it("Evidence carries optional ts, source, severity, attempts", () => {
+    const e: Evidence = {
+      predicate: "URL ends in /done",
+      passed: true,
+      ts: 1700000000000,
+      source: "url",
+      severity: "block",
+      attempts: 3,
+    };
+    expect(e.attempts).toBe(3);
+    expect(e.source).toBe("url");
+  });
 });
