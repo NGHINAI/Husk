@@ -6,7 +6,7 @@ not via shared imports (the SDK has no orchestrator dependency).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Literal, Mapping, Optional, Sequence, Union
+from typing import Any, List, Literal, Mapping, Optional, Sequence, Union, TypedDict
 
 
 Verb = Literal["click", "type", "scroll", "press_key"]
@@ -285,3 +285,29 @@ class Outcome:
             recovery_options=d.get("recovery_options", []),
             steps_observed=d.get("steps_observed", []),
         )
+
+
+# ----- Cognition / Streaming types (M22 Phase E) -----
+
+EventType = Literal[
+    "state_change",
+    "network_idle",
+    "error_appeared",
+    "captcha_detected",
+    "user_intervention_required",
+]
+
+
+class CognitionEvent(TypedDict, total=False):
+    """A cognition event delivered over SSE from /stream/cognition.
+
+    Required fields: id, ts, session_id, type, payload.
+    Optional: site.
+    """
+
+    id: str  # noqa: A003  (shadows built-in; acceptable in TypedDict)
+    ts: int
+    session_id: str
+    type: str  # EventType — str to avoid Literal narrowing issues at runtime
+    payload: dict[str, Any]
+    site: str

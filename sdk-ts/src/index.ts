@@ -1,6 +1,8 @@
 import { JsonRpcClient } from "./transport.js";
 import { Session } from "./session.js";
-import type { Cookie, CreateSessionResult } from "./types.js";
+import { subscribe as subscribeImpl } from "./subscribe.js";
+import type { Cookie, CreateSessionResult, CognitionEvent, EventFilter, EventType, SubscribeHandle } from "./types.js";
+import type { SubscribeClient } from "./subscribe.js";
 
 export const SDK_VERSION = "0.0.0";
 
@@ -112,6 +114,35 @@ export class Husk {
   async health(): Promise<HealthResult> {
     return await this.client.call<HealthResult>("health", {});
   }
+
+  /**
+   * Subscribe to orchestrator cognition events over SSE.
+   *
+   * Calls the JSON-RPC `subscribe` method, opens a streaming SSE connection,
+   * and invokes `onEvent` for each matching event. Returns a handle with an
+   * `unsubscribe()` method that tears down the stream and notifies the server.
+   *
+   * @example
+   * ```ts
+   * const sub = await husk.subscribe("state_change", { session_id: s.id }, (e) => {
+   *   console.log("state changed", e.payload);
+   * });
+   * // ... later ...
+   * await sub.unsubscribe();
+   * ```
+   */
+  async subscribe(
+    eventType: EventType,
+    filter: EventFilter,
+    onEvent: (e: CognitionEvent) => void,
+  ): Promise<SubscribeHandle> {
+    return subscribeImpl(
+      this.client as unknown as SubscribeClient,
+      eventType,
+      filter,
+      onEvent,
+    );
+  }
 }
 
 export { Session } from "./session.js";
@@ -120,3 +151,5 @@ export type { ScrollDirection } from "./session.js";
 export { findInSnapshot, findAllInSnapshot } from "./snapshot.js";
 export type { FindCriteria } from "./snapshot.js";
 export * from "./types.js";
+export { subscribe } from "./subscribe.js";
+export type { SubscribeClient } from "./subscribe.js";

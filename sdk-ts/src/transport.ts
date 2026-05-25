@@ -30,13 +30,18 @@ export interface JsonRpcClientOptions {
  * the orchestrator. No retry, no batching, no timeout (caller handles).
  */
 export class JsonRpcClient {
-  private readonly baseUrl: string;
+  private readonly _baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private nextId = 0;
 
   constructor(opts: JsonRpcClientOptions) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this._baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
+  }
+
+  /** The orchestrator base URL (no trailing slash). Used by subscribe.ts for SSE. */
+  get baseUrl(): string {
+    return this._baseUrl;
   }
 
   /**
@@ -46,7 +51,7 @@ export class JsonRpcClient {
    */
   async call<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
     const id = ++this.nextId;
-    const url = `${this.baseUrl}/v1/jsonrpc`;
+    const url = `${this._baseUrl}/v1/jsonrpc`;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
