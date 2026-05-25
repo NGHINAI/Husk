@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, Literal, Optional
 
 from ._transport import JsonRpcClient
-from ._types import ActionResult, Outcome, Snapshot, parse_action_result, parse_snapshot
+from ._types import ActionResult, CapabilityRequirement, Outcome, Snapshot, parse_action_result, parse_snapshot
 
 WaitForResult = dict[str, Any]
 
@@ -452,6 +452,7 @@ class Session:
         intention_name: str,
         args: Optional[Dict[str, Any]] = None,
         site: Optional[str] = None,
+        capability: Optional[CapabilityRequirement] = None,
     ) -> Outcome:
         """Execute a named intention against the current page state.
 
@@ -462,6 +463,10 @@ class Session:
         :param intention_name: Name of the intention to execute (e.g. "visit_b").
         :param args:           Optional key-value arguments interpolated into steps.
         :param site:           Override site key (defaults to current URL hostname).
+        :param capability:     Optional capability declaration (Phase D M21). Plumbed
+                               through to the orchestrator; enforcement is best-effort
+                               (info Evidence appended). Full mid-intention engine swap
+                               is deferred to a future milestone.
         """
         params: Dict[str, Any] = {
             "session_id": self._id,
@@ -470,6 +475,18 @@ class Session:
         }
         if site is not None:
             params["site"] = site
+        if capability is not None:
+            params["capability"] = {
+                k: v
+                for k, v in {
+                    "js": capability.js,
+                    "features": capability.features,
+                    "cookies_for": capability.cookies_for,
+                    "max_latency": capability.max_latency,
+                    "prefer_engines": capability.prefer_engines,
+                }.items()
+                if v is not None
+            }
         raw = await self._client.call("intend", params)
         return Outcome.from_json(raw)
 

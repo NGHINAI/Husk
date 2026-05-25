@@ -1,4 +1,5 @@
 import type { Predicate, ActionStep, StateId } from "./types.js";
+import type { CapabilityRequirement } from "../engine/capability-types.js";
 
 /** Retry policy for a verify check. */
 export interface RetryOptions {
@@ -98,6 +99,13 @@ export interface Intention {
   failure_modes: FailureModePattern[];
   /** Optional comment for humans reading the YAML. */
   description?: string;
+  /**
+   * Optional capability requirement (Phase D M21).
+   * Declares what the engine must offer to execute this intention.
+   * Best-effort: compiler appends an info Evidence note; full mid-intention
+   * engine swap is deferred to a future milestone.
+   */
+  capability?: CapabilityRequirement;
   created_at: number;
   updated_at: number;
 }

@@ -12,6 +12,7 @@ import type {
   HandoffPasteResult,
   HandoffSeamlessResult,
   Outcome,
+  CapabilityRequirement,
 } from "./types.js";
 
 export type ScrollDirection = "up" | "down" | "left" | "right" | "into_view";
@@ -217,17 +218,23 @@ export class Session {
    * @param args.intention_name  Name of the intention to execute (e.g. "visit_b").
    * @param args.args            Optional key-value arguments interpolated into steps.
    * @param args.site            Override site key (defaults to current URL hostname).
+   * @param args.capability      Optional capability declaration (Phase D M21). Plumbed
+   *                             through to the orchestrator; enforcement is best-effort
+   *                             (info Evidence appended). Full mid-intention engine swap
+   *                             is deferred to a future milestone.
    */
   async intend<T = unknown>(args: {
     intention_name: string;
     args?: Record<string, unknown>;
     site?: string;
+    capability?: CapabilityRequirement;
   }): Promise<Outcome<T>> {
     return await this.client.call<Outcome<T>>("intend", {
       session_id: this.id,
       intention_name: args.intention_name,
       args: args.args,
       site: args.site,
+      capability: args.capability,
     });
   }
 

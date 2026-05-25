@@ -107,7 +107,7 @@ export class IntentionCompiler {
             "unknown_state",
             "no current state matched",
             [], steps_observed, t0,
-          ), session);
+          ), session, intention);
         }
 
         if (state_before !== target) {
@@ -118,7 +118,7 @@ export class IntentionCompiler {
               "no_path_to_target",
               `no path from ${state_before} to ${target}`,
               [], steps_observed, t0,
-            ), session);
+            ), session, intention);
           }
 
           for (const transition of path) {
@@ -148,7 +148,7 @@ export class IntentionCompiler {
                 "state_drift_mid_execution",
                 `expected ${transition.to_state}, saw ${postState?.state.state_id ?? "unknown"}`,
                 [], steps_observed, t0,
-              ), session);
+              ), session, intention);
             }
           }
         }
@@ -206,7 +206,7 @@ export class IntentionCompiler {
             fm.reason,
             `failure_mode matched: ${fm.match.description}`,
             evidence, steps_observed, t0,
-          ), session);
+          ), session, intention);
         }
       }
 
@@ -222,7 +222,7 @@ export class IntentionCompiler {
           "verify_failed",
           "one or more verify checks failed",
           evidence, steps_observed, t0,
-        ), session);
+        ), session, intention);
       }
 
       // Step 7: identify final state.
@@ -237,7 +237,7 @@ export class IntentionCompiler {
         evidence,
         duration_ms: this.now() - t0,
         steps_observed,
-      }, session);
+      }, session, intention);
 
     } catch (err) {
       const { reason, detail } = classifyError(err);
@@ -245,7 +245,7 @@ export class IntentionCompiler {
         intention, args, state_before, undefined,
         reason, detail,
         [], steps_observed, t0,
-      ), session);
+      ), session, intention);
     }
   }
 
@@ -394,14 +394,29 @@ export class IntentionCompiler {
   }
 
   // ---------------------------------------------------------------------------
-  // finishOutcome — log observation side-effect then return outcome.
+  // finishOutcome — append capability info note (Phase D T5) + log observation.
   // Observation logging MUST NOT throw; it is wrapped in try/catch.
   // ---------------------------------------------------------------------------
 
   private finishOutcome<T = unknown>(
     outcome: Outcome<T>,
     session: SessionAdapter,
+    intention?: Intention,
   ): Outcome<T> {
+    // Phase D T5: if the intention declares a capability, append an info Evidence
+    // note. This is purely informational — the router has already done its job at
+    // session-create / acquire time. Full mid-intention engine swap is deferred.
+    if (intention?.capability) {
+      const capNote: Evidence = {
+        predicate: `intention declares capability: ${JSON.stringify(intention.capability)}`,
+        passed: true,
+        source: "predicate",
+        severity: "info",
+        ts: Date.now(),
+      };
+      (outcome.evidence as Evidence[]).push(capNote);
+    }
+
     if (this.storage) {
       try {
         linkOutcomeToObservation(this.storage, this.site, session.currentUrl(), outcome as Outcome);
