@@ -12,3 +12,11 @@ export { evaluate } from "./predicate.js";
 
 export { StateGraph } from "./state-graph.js";
 export { CognitionStorage } from "./storage.js";
+
+export {
+  newTransitionConfidence,
+  applySuccess,
+  applyFailure,
+  decay,
+  reliability,
+} from "./confidence.js";
