@@ -6,6 +6,8 @@ import type {
   ResolvedHandoff,
   ResumeCookie,
 } from "./types.js";
+import type { CognitionBus } from "../cognition/cognition-bus.js";
+import type { CognitionEvent } from "../cognition/events.js";
 
 interface QuestionEntry {
   pending: PendingQuestion;
@@ -34,6 +36,11 @@ export interface HandoffInput {
 export class HumanIOBus {
   private questions = new Map<string, QuestionEntry>();
   private handoffs = new Map<string, HandoffEntry>();
+  private cognitionBus: CognitionBus | null = null;
+
+  setCognitionBus(bus: CognitionBus): void {
+    this.cognitionBus = bus;
+  }
 
   askQuestion(
     sessionId: string,
@@ -64,6 +71,7 @@ export class HumanIOBus {
         timer,
       });
     });
+    this.emitIntervention(sessionId, "ask_human", token);
     return { token, promise };
   }
 
@@ -104,6 +112,7 @@ export class HumanIOBus {
         timer,
       });
     });
+    this.emitIntervention(sessionId, "handoff");
     return { token, promise };
   }
 
@@ -134,5 +143,17 @@ export class HumanIOBus {
 
   listPendingHandoffs(): PendingHandoff[] {
     return [...this.handoffs.values()].map((e) => e.pending);
+  }
+
+  private emitIntervention(sessionId: string, reason: "ask_human" | "handoff", question_id?: string): void {
+    if (!this.cognitionBus) return;
+    const ev: CognitionEvent = {
+      id: randomUUID(),
+      ts: Date.now(),
+      session_id: sessionId,
+      type: "user_intervention_required",
+      payload: { reason, ...(question_id !== undefined && { question_id }) },
+    };
+    this.cognitionBus.publish(ev);
   }
 }

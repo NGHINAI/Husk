@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { HumanIOBus } from "../../src/hitl/bus.js";
+import type { CognitionBus } from "../../src/cognition/cognition-bus.js";
 
 describe("HumanIOBus questions", () => {
   it("askQuestion returns {token, watch_url placeholder absent, promise}; promise resolves on answer", async () => {
@@ -112,5 +113,92 @@ describe("HumanIOBus handoffs", () => {
     bus.startHandoff("s1", { reason: "x" }, 10_000);
     bus.startHandoff("s2", { reason: "y" }, 10_000);
     expect(bus.listPendingHandoffs()).toHaveLength(2);
+  });
+});
+
+describe("HumanIOBus cognition events", () => {
+  it("askQuestion publishes user_intervention_required event to cognition bus with reason=ask_human", () => {
+    const mockCognitionBus = {
+      publish: vi.fn(),
+    } as unknown as CognitionBus;
+
+    const bus = new HumanIOBus();
+    bus.setCognitionBus(mockCognitionBus);
+
+    const { token } = bus.askQuestion("sess1", { question: "Pick one", options: ["A", "B"] }, 10_000);
+
+    // Verify the event was published
+    expect(mockCognitionBus.publish).toHaveBeenCalledOnce();
+    const event = vi.mocked(mockCognitionBus.publish).mock.calls[0][0];
+    expect(event).toMatchObject({
+      type: "user_intervention_required",
+      session_id: "sess1",
+      payload: {
+        reason: "ask_human",
+        question_id: token,
+      },
+    });
+    expect(event.id).toBeDefined();
+    expect(event.ts).toBeDefined();
+    expect(typeof event.id).toBe("string");
+    expect(typeof event.ts).toBe("number");
+  });
+
+  it("startHandoff publishes user_intervention_required event to cognition bus with reason=handoff", () => {
+    const mockCognitionBus = {
+      publish: vi.fn(),
+    } as unknown as CognitionBus;
+
+    const bus = new HumanIOBus();
+    bus.setCognitionBus(mockCognitionBus);
+
+    const { token } = bus.startHandoff("sess2", {
+      reason: "captcha",
+      suggested_action: "Solve it",
+      current_url: "https://x.com",
+      need_cookies_back: true,
+    }, 10_000);
+
+    // Verify the event was published
+    expect(mockCognitionBus.publish).toHaveBeenCalledOnce();
+    const event = vi.mocked(mockCognitionBus.publish).mock.calls[0][0];
+    expect(event).toMatchObject({
+      type: "user_intervention_required",
+      session_id: "sess2",
+      payload: {
+        reason: "handoff",
+      },
+    });
+    expect(event.id).toBeDefined();
+    expect(event.ts).toBeDefined();
+    expect(event.payload.question_id).toBeUndefined();
+  });
+
+  it("askQuestion does not publish if cognition bus is not set", () => {
+    const mockCognitionBus = {
+      publish: vi.fn(),
+    } as unknown as CognitionBus;
+
+    const bus = new HumanIOBus();
+    // Intentionally not calling setCognitionBus
+
+    bus.askQuestion("sess1", { question: "?" }, 10_000);
+
+    // Verify no event was published
+    expect(mockCognitionBus.publish).not.toHaveBeenCalled();
+  });
+
+  it("startHandoff does not publish if cognition bus is not set", () => {
+    const mockCognitionBus = {
+      publish: vi.fn(),
+    } as unknown as CognitionBus;
+
+    const bus = new HumanIOBus();
+    // Intentionally not calling setCognitionBus
+
+    bus.startHandoff("sess1", { reason: "x" }, 10_000);
+
+    // Verify no event was published
+    expect(mockCognitionBus.publish).not.toHaveBeenCalled();
   });
 });
