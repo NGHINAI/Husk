@@ -33,6 +33,10 @@ export interface ImportingSession {
       sameSite?: string;
     }>,
   ): Promise<number>;
+  /** Optional: get the attached profile name, or null if none set. */
+  getProfile?(): string | null;
+  /** Optional: capture cookies to vault (best-effort, should not throw). */
+  captureToVault?(): Promise<void>;
 }
 
 /**
