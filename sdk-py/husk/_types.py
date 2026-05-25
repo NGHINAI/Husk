@@ -171,3 +171,86 @@ def parse_action_result(d: Mapping[str, Any]) -> ActionResult:
         snapshot_at_attempt=parse_snapshot(d["snapshot_at_attempt"]),
         message=d.get("message"),
     )
+
+
+# ----- Intention / Outcome types (M19 Phase B) -----
+
+FailureReason = Literal[
+    # State-machine reasons
+    "unknown_site",
+    "unknown_state",
+    "no_path_to_target",
+    "state_drift_mid_execution",
+    "verify_failed",
+    # Step execution reasons
+    "element_not_found",
+    "element_not_interactive",
+    "watchdog_rejected",
+    "timeout",
+    # Network reasons
+    "network_failure",
+    "network_timeout",
+    "network_throttled",
+    "rate_limited",
+    # Site-side reasons
+    "account_locked",
+    "bot_challenge",
+    "two_factor_required",
+    "permission_denied",
+    "content_not_found",
+    "feature_unavailable",
+    # Human reasons
+    "needs_human",
+    "needs_credentials",
+    "needs_2fa_code",
+    "needs_payment_confirmation",
+    "human_declined",
+    "human_timeout",
+    # Engine reasons
+    "engine_unsupported",
+    "engine_crashed",
+    "out_of_memory",
+    "pool_exhausted",
+    # Unknown
+    "unknown_error",
+]
+
+
+@dataclass
+class Evidence:
+    predicate: str
+    passed: bool
+    observed_value: Any = None
+
+
+@dataclass
+class Outcome:
+    ok: bool
+    intention: str
+    args: Any
+    state_before: Optional[str]
+    evidence: list["Evidence"] = field(default_factory=list)
+    duration_ms: int = 0
+    state_after: Optional[str] = None
+    result: Any = None
+    reason: Optional[str] = None  # FailureReason Literal
+    reason_detail: Optional[str] = None
+    recovery_options: list[dict[str, Any]] = field(default_factory=list)
+    steps_observed: list[Any] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, Any]) -> "Outcome":
+        return cls(
+            ok=d["ok"],
+            intention=d["intention"],
+            args=d.get("args"),
+            state_before=d.get("state_before"),
+            state_after=d.get("state_after"),
+            result=d.get("result"),
+            evidence=[Evidence(**e) for e in d.get("evidence", [])],
+            duration_ms=d.get("duration_ms", 0),
+            reason=d.get("reason"),
+            reason_detail=d.get("reason_detail"),
+            recovery_options=d.get("recovery_options", []),
+            steps_observed=d.get("steps_observed", []),
+        )
