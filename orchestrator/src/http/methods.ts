@@ -15,6 +15,27 @@ import { pickEngine } from "../engine/capability-router.js";
 import { ALL_ENGINES } from "../engine/engine-capabilities.js";
 import type { CognitionBus } from "../cognition/cognition-bus.js";
 import type { EventType } from "../cognition/events.js";
+import { KNOWN_RICH_SITES } from "../engine/page-health.js";
+
+/**
+ * M24 T4: Pre-flight rich-site detection.
+ * Returns true when the URL's hostname (www. stripped) is in KNOWN_RICH_SITES
+ * or is a subdomain of a KNOWN_RICH_SITES entry.
+ * Mirrors the isKnownRichSite helper in page-health.ts (kept local to avoid
+ * exporting an internal helper from that module).
+ */
+function isRichSite(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+    if (KNOWN_RICH_SITES.has(host)) return true;
+    for (const s of KNOWN_RICH_SITES) {
+      if (host.endsWith("." + s)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 /** All valid cognition event types (kept in sync with EventType union). */
 const VALID_EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
@@ -140,6 +161,27 @@ export const METHODS = {
       throw new InvalidUrlError(params.url);
     }
     const session = ctx.sessions.get(params.session_id);
+
+    // M24 T4: Pre-flight — swap to Chrome BEFORE navigation when the destination
+    // URL is a known-rich site and the session is currently on lightpanda.
+    // This avoids the partial-render failure that M17's post-flight catches after
+    // the fact (e.g. LinkedIn's "Ha habido un problema" on lightpanda).
+    // Conditions: lightpanda engine + known-rich URL + Chrome pool available.
+    // Best-effort: if the swap fails, fall through and let lightpanda attempt
+    // the goto (M17's post-goto health check may still rescue it).
+    if (
+      session.currentEngine === "lightpanda" &&
+      isRichSite(params.url) &&
+      ctx.chromePool
+    ) {
+      const { fallbackToChrome } = await import("../engine/fallback.js");
+      try {
+        await fallbackToChrome(session as any, ctx.chromePool, params.session_id);
+      } catch {
+        // Chrome unavailable — fall through to lightpanda goto
+      }
+    }
+
     const result = await session.goto(params.url, { include_snapshot: params.include_snapshot });
 
     // M17 T6: Auto page-health check — only when:
@@ -286,6 +328,21 @@ export const METHODS = {
   ) {
     ctx.vault.remove(params.profile, { name: params.name, domain: params.domain, path: params.path });
     return { ok: true };
+  },
+
+  async vault_save(
+    params: { session_id: string },
+    ctx: MethodContext
+  ): Promise<{ saved: true; profile: string; cookie_count: number } | { saved: false; reason: string }> {
+    const session = ctx.sessions.get(params.session_id);
+    if (!session) throw new Error(`session not found: ${params.session_id}`);
+    const profile = session.getProfile();
+    if (!profile) {
+      return { saved: false, reason: "session has no profile attached" };
+    }
+    await session.captureToVault();
+    const cookies = ctx.vault.list(profile);
+    return { saved: true, profile, cookie_count: cookies.length };
   },
 
   async credentials_set(

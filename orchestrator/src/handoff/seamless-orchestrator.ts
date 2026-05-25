@@ -140,6 +140,14 @@ export async function runSeamlessHandoff(
           count = 0;
         }
       }
+      // Auto-save to vault if cookies were imported and session has a profile
+      if (count > 0 && opts.session.getProfile?.() && opts.session.captureToVault) {
+        try {
+          await opts.session.captureToVault();
+        } catch {
+          // Best-effort: handoff still succeeds even if save fails
+        }
+      }
       await finalize({
         resumed: true,
         cookies_imported: count,

@@ -117,6 +117,18 @@ describe("husk_session MCP tool", () => {
     const actionEnum = (tool!.inputSchema.properties.action as { enum: string[] }).enum;
     expect(actionEnum).not.toContain("load_profile");
   });
+
+  it("action=save_profile routes to vault_save RPC with session_id", async () => {
+    const client = { call: vi.fn(async () => ({ saved: true, profile: "linkedin", cookie_count: 14 })) };
+    await handleToolCall(client as any, "husk_session", { action: "save_profile", session_id: "s1" });
+    expect(client.call).toHaveBeenCalledWith("vault_save", { session_id: "s1" });
+  });
+
+  it("action=create threads profile through to create_session RPC", async () => {
+    const client = { call: vi.fn(async () => ({ session_id: "new-s", engine: "lightpanda" })) };
+    await handleToolCall(client as any, "husk_session", { action: "create", profile: "linkedin" });
+    expect(client.call).toHaveBeenCalledWith("create_session", expect.objectContaining({ profile: "linkedin" }));
+  });
 });
 
 describe("husk_handoff action=resume", () => {
