@@ -1620,7 +1620,7 @@ export class Session {
 
     const storage = new CognitionStorage(this.siteGraph);
     const graph = storage.loadStateGraph(site);
-    const compiler = new IntentionCompiler({ graph, site });
+    const compiler = new IntentionCompiler({ graph, site, bus: this._cognitionBus ?? undefined });
 
     const adapter: SessionAdapter = {
       currentUrl: () => this.currentUrl,

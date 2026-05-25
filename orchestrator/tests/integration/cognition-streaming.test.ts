@@ -601,5 +601,134 @@ integrationOrSkip(
       },
       60_000,
     );
+
+    // -------------------------------------------------------------------------
+    // Test 4: session.intend() now threads cognitionBus to IntentionCompiler
+    // -------------------------------------------------------------------------
+    it(
+      "Test 4: session.intend() delivers state_change events over SSE (via threaded cognitionBus)",
+      async () => {
+        const suffix = randomBytes(8).toString("hex");
+        const cacheDir = join(tmpdir(), `husk-stream-t4-${suffix}`);
+        const cache = new SiteGraphCache({ cacheDir });
+        const storage = new CognitionStorage(cache);
+        const intentionStore = new IntentionStore(cache.db);
+        const fixture = await startFixture();
+        const site = "127.0.0.1";
+        const now = Date.now();
+        const bus = new CognitionBus();
+        let husk: HuskServer | undefined;
+        let session: Session | undefined;
+        const sseAbort = new AbortController();
+
+        try {
+          // --- Pre-seed cognition data ---
+          storage.upsertState({
+            site,
+            state_id: "page_a",
+            identify_by: { type: "url_pattern", regex: "/page-a" },
+            affordances: ["visit_b"],
+            observed_count: 1,
+            confidence: 0.9,
+            last_seen_at: now,
+          });
+
+          storage.upsertState({
+            site,
+            state_id: "page_b",
+            identify_by: { type: "url_pattern", regex: "/page-b" },
+            affordances: [],
+            observed_count: 1,
+            confidence: 0.9,
+            last_seen_at: now,
+          });
+
+          storage.upsertTransition({
+            site,
+            from_state: "page_a",
+            to_state: "page_b",
+            action_sequence: [
+              { verb: "navigate", url: `http://127.0.0.1:${fixture.port}/page-b` },
+            ],
+            success_count: 1,
+            failure_count: 0,
+            avg_duration_ms: 200,
+            confidence: 0.9,
+            last_used_at: now,
+          });
+
+          intentionStore.upsert({
+            site,
+            name: "visit_b",
+            args_schema: {},
+            requires_state: "page_b",
+            steps: [],
+            verify: [{ type: "url", pattern: "/page-b", description: "landed on page-b" }],
+            failure_modes: [],
+            created_at: now,
+            updated_at: now,
+          });
+
+          // --- Start HuskServer with shared bus ---
+          husk = await startHuskServer(bus);
+          const baseUrl = `http://127.0.0.1:${husk.port}`;
+
+          // --- Subscribe via JSON-RPC ---
+          const { subscription_id } = await rpc<{ subscription_id: string; stream_url: string }>(
+            baseUrl,
+            "subscribe",
+            { event_type: "state_change", session_id: "*" },
+          );
+          expect(typeof subscription_id).toBe("string");
+
+          // --- Create real Session with cognitionBus ---
+          session = await Session.create({
+            readinessTimeoutMs: 15_000,
+            siteGraph: cache,
+            cognitionBus: bus,
+          });
+
+          // Navigate to page-a so the state matches page_a at compiler start.
+          await session.goto(`http://127.0.0.1:${fixture.port}/page-a`);
+
+          // --- Open SSE stream ---
+          const sseUrl = `${baseUrl}/stream/cognition?subscription_id=${subscription_id}`;
+          // Start collecting in background — we read for up to 5 s or until 1 event.
+          const eventsPromise = collectSseEvents(sseUrl, 1, 5_000, sseAbort);
+
+          // Give SSE connection a moment to establish (setHandler wires on connect).
+          await new Promise<void>((r) => setTimeout(r, 150));
+
+          // --- Execute intention via session.intend() ---
+          // With the M22 Phase E T11 fix, session.intend() now threads cognitionBus
+          // to IntentionCompiler, so state_change events should flow through the bus.
+          const outcome = await session.intend({
+            intention_name: "visit_b",
+          });
+
+          console.log(
+            `[T4] intention outcome: ok=${outcome.ok} reason=${(outcome as any).reason ?? "none"}`,
+          );
+
+          // --- Wait for SSE events ---
+          const events = await eventsPromise;
+          console.log(`[T4] SSE events received: ${events.length}`, JSON.stringify(events));
+
+          // Assert: at least one state_change event received.
+          expect(events.length).toBeGreaterThanOrEqual(1);
+          const ev = events[0];
+          expect(ev.type).toBe("state_change");
+          expect((ev.payload as any).to_state).toBe("page_b");
+        } finally {
+          sseAbort.abort();
+          await session?.close();
+          await fixture.close();
+          await husk?.stop();
+          cache.close();
+          rmSync(cacheDir, { recursive: true, force: true });
+        }
+      },
+      60_000,
+    );
   },
 );
