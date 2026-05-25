@@ -13,6 +13,17 @@ import type { ChromePool } from "../engine/chrome-pool.js";
 import type { CapabilityRequirement } from "../engine/capability-types.js";
 import { pickEngine } from "../engine/capability-router.js";
 import { ALL_ENGINES } from "../engine/engine-capabilities.js";
+import type { CognitionBus } from "../cognition/cognition-bus.js";
+import type { EventType } from "../cognition/events.js";
+
+/** All valid cognition event types (kept in sync with EventType union). */
+const VALID_EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
+  "state_change",
+  "network_idle",
+  "error_appeared",
+  "captcha_detected",
+  "user_intervention_required",
+]);
 
 /** Per-request context the methods need. Wired in by the JSON-RPC dispatcher. */
 export interface MethodContext {
@@ -45,6 +56,12 @@ export interface MethodContext {
    * Absent when Chrome is not available on this machine.
    */
   chromePool?: ChromePool;
+  /**
+   * M22 T8: Cognition event bus — needed for subscribe / unsubscribe methods.
+   * The same singleton instance must be shared with the SSE route (T7) and
+   * session emitters (T3–T6).
+   */
+  cognitionBus?: CognitionBus;
 }
 
 /** Result of `health` — confirms the server is up and reports session count. */
@@ -875,6 +892,61 @@ export const METHODS = {
         ...(params.options !== undefined ? { options: params.options } : {}),
       },
     };
+  },
+
+  /**
+   * M22 T8: Register a subscription on the CognitionBus.
+   *
+   * Validates event_type, registers a placeholder (no-op) subscription, and
+   * returns the subscription_id + the SSE URL the agent should open.
+   * The SSE endpoint (T7) replaces the no-op handler when the agent connects.
+   */
+  async subscribe(
+    params: {
+      event_type: EventType;
+      session_id?: string;
+      site?: string;
+      debounce_ms?: number;
+    },
+    ctx: MethodContext,
+  ): Promise<{ subscription_id: string; stream_url: string }> {
+    if (!VALID_EVENT_TYPES.has(params.event_type as string)) {
+      const valid = Array.from(VALID_EVENT_TYPES).join(", ");
+      throw new Error(
+        `Invalid event_type "${params.event_type}". Must be one of: ${valid}`,
+      );
+    }
+    const bus = ctx.cognitionBus;
+    if (!bus) {
+      throw new Error("subscribe is not available: cognitionBus not initialised");
+    }
+    const filter = {
+      ...(params.session_id !== undefined ? { session_id: params.session_id } : {}),
+      ...(params.site !== undefined ? { site: params.site } : {}),
+      ...(params.debounce_ms !== undefined ? { debounce_ms: params.debounce_ms } : {}),
+    };
+    // Register a placeholder no-op handler; the SSE endpoint replaces it via
+    // bus.setHandler() when the agent opens the stream.
+    const subscription_id = bus.subscribe(params.event_type, filter, () => {});
+    return {
+      subscription_id,
+      stream_url: `/stream/cognition?subscription_id=${subscription_id}`,
+    };
+  },
+
+  /**
+   * M22 T8: Remove a subscription from the CognitionBus.
+   */
+  async unsubscribe(
+    params: { subscription_id: string },
+    ctx: MethodContext,
+  ): Promise<{ removed: boolean }> {
+    const bus = ctx.cognitionBus;
+    if (!bus) {
+      throw new Error("unsubscribe is not available: cognitionBus not initialised");
+    }
+    const removed = bus.unsubscribe(params.subscription_id);
+    return { removed };
   },
 
   /**
