@@ -35,6 +35,8 @@ import { classifyError, recoveryStrategy } from "./failure-taxonomy.js";
 import { interpolate } from "./intention-yaml.js";
 import type { CognitionStorage } from "./storage.js";
 import { linkOutcomeToObservation } from "./observation-link.js";
+import type { CognitionBus } from "./cognition-bus.js";
+import { emitStateChange } from "./event-emitters.js";
 
 // ---------------------------------------------------------------------------
 // SessionAdapter — minimal interface the compiler needs.
@@ -42,6 +44,8 @@ import { linkOutcomeToObservation } from "./observation-link.js";
 // ---------------------------------------------------------------------------
 
 export interface SessionAdapter {
+  /** Stable identifier for the session (used for event emission). */
+  readonly id?: string;
   currentUrl(): string;
   /** Returns Husk snapshot envelope (opaque shape; compiler reads .root / .url). */
   snapshot(): Promise<unknown>;
@@ -58,6 +62,10 @@ export interface CompilerOptions {
   site: string;
   /** When set, outcomes get logged to cognition_observations (Phase D). */
   storage?: CognitionStorage;
+  /** When set, state_change events are published after each successful transition
+   * and at the end of execute() when the state changes.  Optional — when absent
+   * the compiler behaves exactly as in Phase D (no events, no throw). */
+  bus?: CognitionBus;
   /** Optional clock override for testing. */
   now?: () => number;
 }
@@ -72,12 +80,14 @@ export class IntentionCompiler {
   readonly site: string;
   private readonly now: () => number;
   private readonly storage: CognitionStorage | undefined;
+  private readonly bus: CognitionBus | undefined;
 
   constructor(opts: CompilerOptions) {
     this.graph = opts.graph;
     this.site = opts.site;
     this.now = opts.now ?? (() => Date.now());
     this.storage = opts.storage;
+    this.bus = opts.bus;
   }
 
   async execute<T = unknown>(
@@ -140,6 +150,17 @@ export class IntentionCompiler {
               duration_ms: this.now() - tStart,
               ok: arrived,
             });
+
+            // Emit state_change for each successful transition.
+            if (arrived && this.bus && transition.from_state !== transition.to_state) {
+              emitStateChange(
+                this.bus,
+                session.id ?? "unknown",
+                this.site,
+                transition.from_state,
+                transition.to_state,
+              );
+            }
 
             if (!arrived) {
               return this.finishOutcome(this.failOutcome(
@@ -227,13 +248,26 @@ export class IntentionCompiler {
 
       // Step 7: identify final state.
       const finalState = this.graph.identifyCurrentState(this.adapt(snap, url));
+      const state_after = finalState?.state.state_id;
+
+      // Emit final state_change if the state moved during this execute().
+      // Skip when from === to (no movement) or when bus is not set.
+      if (this.bus && state_after !== undefined && state_before !== state_after) {
+        emitStateChange(
+          this.bus,
+          session.id ?? "unknown",
+          this.site,
+          state_before,
+          state_after,
+        );
+      }
 
       return this.finishOutcome({
         ok: true,
         intention: intention.name,
         args,
         state_before,
-        state_after: finalState?.state.state_id,
+        state_after,
         evidence,
         duration_ms: this.now() - t0,
         steps_observed,

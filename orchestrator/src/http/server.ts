@@ -11,8 +11,10 @@ import type { CredentialsStore } from "../credentials/store.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { HumanIOBus } from "../hitl/bus.js";
 import type { ChromePool } from "../engine/chrome-pool.js";
+import { CognitionBus } from "../cognition/cognition-bus.js";
 import { WATCH_HTML } from "../watch/index.html.js";
 import { registerHitlRoutes } from "./hitl-routes.js";
+import { handleCognitionSse } from "../stream/sse-cognition.js";
 
 export interface HuskServerOptions {
   port: number;
@@ -30,6 +32,8 @@ export interface HuskServerOptions {
   humanIO?: HumanIOBus;
   /** M17 T6: Chrome pool — passed to method context so goto can run page-health fallback. */
   chromePool?: ChromePool;
+  /** M22 T7: Cognition event bus — enables the /stream/cognition SSE endpoint. Only registered when host === "127.0.0.1". */
+  cognitionBus?: CognitionBus;
 }
 
 export interface HuskServer {
@@ -55,6 +59,11 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
   // Shared seamless trigger map — written by the handoff method, read by the
   // /handoff/:token/seamless-done HTTP route. Both get the same Map instance.
   const seamlessTriggers = new Map<string, () => void>();
+
+  // M22 T8: singleton CognitionBus — use the one passed in, or create a fresh
+  // one so subscribe/unsubscribe always have a bus available.
+  const cognitionBus: CognitionBus = opts.cognitionBus ?? new CognitionBus();
+
   const ctx: MethodContext = {
     sessions: opts.sessions,
     version: opts.version,
@@ -66,6 +75,7 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
     watchBus: opts.watchBus,
     seamlessTriggers,
     chromePool: opts.chromePool,
+    cognitionBus,
   };
 
   app.post("/v1/jsonrpc", async (c) => {
@@ -127,6 +137,12 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
       portRef,
       seamlessTriggers,
     });
+  }
+
+  // M22 T7+T8: /stream/cognition SSE endpoint — registered when loopback.
+  // cognitionBus is always non-null here (created above if not supplied via opts).
+  if (opts.host === "127.0.0.1") {
+    app.get("/stream/cognition", (c) => handleCognitionSse(cognitionBus, c));
   }
 
   const server = await new Promise<ServerType>((resolve) => {

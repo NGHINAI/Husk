@@ -24,6 +24,10 @@ export interface NetworkEntry {
 export class NetworkBuffer {
   private entries = new Map<string, NetworkEntry>();
   private order: string[] = [];
+  /** Tracks requestIds for in-flight (started but not yet completed) requests. */
+  private inFlight = new Set<string>();
+  /** Listeners invoked whenever a response (success or failure) completes. */
+  private responseCompleteListeners: Array<() => void> = [];
 
   constructor(private maxSize: number = 100) {}
 
@@ -34,9 +38,11 @@ export class NetworkBuffer {
       started_at: info.startedAt,
     });
     this.order.push(requestId);
+    this.inFlight.add(requestId);
     while (this.order.length > this.maxSize) {
       const evict = this.order.shift()!;
       this.entries.delete(evict);
+      this.inFlight.delete(evict);
     }
   }
 
@@ -46,6 +52,8 @@ export class NetworkBuffer {
     e.status = info.status;
     e.content_type = info.mimeType;
     e.duration_ms = info.completedAt - e.started_at;
+    this.inFlight.delete(requestId);
+    this._notifyResponseComplete();
   }
 
   onFailed(requestId: string, info: { completedAt: number }): void {
@@ -53,6 +61,31 @@ export class NetworkBuffer {
     if (!e) return;
     e.status = 0;
     e.duration_ms = info.completedAt - e.started_at;
+    this.inFlight.delete(requestId);
+    this._notifyResponseComplete();
+  }
+
+  /** Returns the number of requests that have started but not yet completed. */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
+  /**
+   * Register a callback to be invoked whenever a response (success or failure)
+   * completes. Returns an unsubscribe function.
+   */
+  onResponseComplete(fn: () => void): () => void {
+    this.responseCompleteListeners.push(fn);
+    return () => {
+      const idx = this.responseCompleteListeners.indexOf(fn);
+      if (idx !== -1) this.responseCompleteListeners.splice(idx, 1);
+    };
+  }
+
+  private _notifyResponseComplete(): void {
+    for (const fn of this.responseCompleteListeners) {
+      try { fn(); } catch { /* listener errors must not break the buffer */ }
+    }
   }
 
   recent(): NetworkEntry[] {

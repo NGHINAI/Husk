@@ -1,7 +1,8 @@
 """Husk — open-source browser engine for AI agents (Python SDK)."""
 from __future__ import annotations
 
-from typing import Any, Optional
+import json
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -11,7 +12,9 @@ from ._transport import JsonRpcClient, JsonRpcTransportError, HuskApiError
 from ._types import (
     ActionResult,
     Candidate,
+    CognitionEvent,
     Cookie,
+    EventType,
     Evidence,
     Outcome,
     RejectionEnvelope,
@@ -74,6 +77,68 @@ class Husk:
     async def health(self) -> dict[str, Any]:
         return await self._client.call("health", {})
 
+    async def subscribe(
+        self,
+        event_type: EventType,
+        *,
+        session_id: Optional[str] = None,
+        site: Optional[str] = None,
+        debounce_ms: Optional[int] = None,
+    ) -> AsyncIterator[CognitionEvent]:
+        """Subscribe to orchestrator cognition events over SSE.
+
+        Yields :class:`CognitionEvent` dicts as they arrive from the
+        ``/stream/cognition`` SSE endpoint. Calls the server-side
+        ``unsubscribe`` JSON-RPC method in a ``try/finally`` block when the
+        async generator is closed (normal exit, break, or exception).
+
+        Usage::
+
+            async for event in await husk.subscribe("state_change", session_id=s_id):
+                print(event["type"], event["payload"])
+        """
+        return self._subscribe_gen(
+            event_type,
+            session_id=session_id,
+            site=site,
+            debounce_ms=debounce_ms,
+        )
+
+    async def _subscribe_gen(
+        self,
+        event_type: EventType,
+        *,
+        session_id: Optional[str] = None,
+        site: Optional[str] = None,
+        debounce_ms: Optional[int] = None,
+    ) -> AsyncIterator[CognitionEvent]:
+        params: dict[str, Any] = {"event_type": event_type}
+        if session_id is not None:
+            params["session_id"] = session_id
+        if site is not None:
+            params["site"] = site
+        if debounce_ms is not None:
+            params["debounce_ms"] = debounce_ms
+
+        resp = await self._client.call("subscribe", params)
+        subscription_id: str = resp["subscription_id"]
+        stream_url = f"{self._client._base_url.rstrip('/')}{resp['stream_url']}"
+
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", stream_url) as r:
+                    async for line in r.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                yield json.loads(line[6:])  # type: ignore[misc]
+                            except json.JSONDecodeError:
+                                continue
+        finally:
+            try:
+                await self._client.call("unsubscribe", {"subscription_id": subscription_id})
+            except Exception:  # noqa: BLE001
+                pass
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -99,6 +164,8 @@ __all__ = [
     "Cookie",
     "Evidence",
     "Outcome",
+    "CognitionEvent",
+    "EventType",
     "VaultApi",
     "CredentialsApi",
     "JsonRpcTransportError",

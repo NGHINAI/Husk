@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawnLightpanda, type LightpandaProcess } from "../engine/lifecycle.js";
 import { CdpClient } from "../engine/cdp-client.js";
 import { waitForPageReady } from "./page-ready.js";
@@ -42,6 +43,14 @@ import { IntentionStore } from "../cognition/intention-store.js";
 import { CognitionStorage } from "../cognition/storage.js";
 import { IntentionCompiler, type SessionAdapter } from "../cognition/intention-compiler.js";
 import type { Outcome } from "../cognition/intention-types.js";
+import type { CognitionBus } from "../cognition/cognition-bus.js";
+import {
+  wireNetworkIdle,
+  emitCaptchaIfDetected,
+  emitErrorIfPresent,
+  type CaptchaDedupeState,
+  type ErrorDedupeState,
+} from "../cognition/event-emitters.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -80,6 +89,12 @@ export interface SessionOptions {
   watchBus?: WatchBus;
   /** The session id to use when emitting to the watch bus. Set by SessionManager. */
   watchSessionId?: string;
+  /**
+   * Optional cognition event bus (M22 Phase E). When provided, the session
+   * wires a debounced network-idle detector and publishes `network_idle`
+   * events whenever the network settles.
+   */
+  cognitionBus?: CognitionBus;
   /**
    * Callback that returns the sibling session ids (other tabs in the same tab
    * group). Injected by SessionManager so snapshot() can include sibling_sessions
@@ -142,7 +157,17 @@ export class Session {
   /** HITL pause state. When non-null, all action methods are gated. Snapshot still works. */
   private paused: { token: string; handoff_url: string | null } | null = null;
   /** Ring buffer of recent CDP Network events. Populated after Session.create(). */
-  private networkBuffer = new NetworkBuffer(100);
+  readonly networkBuffer = new NetworkBuffer(100);
+  /** Stable session identifier — defaults to watchId when available. */
+  private _sessionId: string = randomUUID();
+  /** Cleanup function returned by wireNetworkIdle; called in close(). */
+  private _networkIdleCleanup: (() => void) | null = null;
+  /** M22 T5: Optional cognition bus reference for captcha/error emitters. */
+  private _cognitionBus: CognitionBus | null = null;
+  /** M22 T5: Dedup state for captcha_detected emission (per session). */
+  private _captchaDedup: CaptchaDedupeState = { lastCaptchaKey: null };
+  /** M22 T5: Dedup state for error_appeared emission (per session). */
+  private _errorDedup: ErrorDedupeState = { lastErrorTexts: new Set() };
   /** Ring buffer of recent console messages (Runtime + Log CDP events). */
   private consoleBuffer = new ConsoleBuffer(50);
   /** Ring buffer of recent session actions (click, type, etc). */
@@ -176,6 +201,26 @@ export class Session {
     private readonly getSiblings: (() => string[]) | null = null
   ) {
     this.activeSessionId = sessionId;
+    // If a watchId was supplied, use it as the stable session identifier so that
+    // cognition events share the same id as watch events.
+    if (watchId) this._sessionId = watchId;
+  }
+
+  /** Stable session identifier. Matches the watchId when one is set. */
+  get id(): string {
+    return this._sessionId;
+  }
+
+  /**
+   * Returns the hostname of the current URL (best-effort, empty string on
+   * parse failure). Used as the `site` field in cognition events.
+   */
+  currentSite(): string {
+    try {
+      return new URL(this.currentUrl).hostname;
+    } catch {
+      return "";
+    }
   }
 
   /** Emit an event to the watch bus if one is wired. No-op otherwise. */
@@ -356,6 +401,14 @@ export class Session {
     if (opts.profile && opts.vault) {
       await inst.restoreFromVault();
     }
+
+    // M22 Phase E T4: Wire debounced network-idle detector when a cognition bus
+    // is supplied. The cleanup function is stored and called in close().
+    if (opts.cognitionBus) {
+      inst._cognitionBus = opts.cognitionBus;
+      inst._networkIdleCleanup = wireNetworkIdle(opts.cognitionBus, inst);
+    }
+
     return inst;
   }
 
@@ -518,6 +571,13 @@ export class Session {
     this.siteGraph?.observe(snap);
     // Emit snapshot event on cache miss only (not on freshness-cache hits).
     this.emitWatch({ kind: "snapshot", ts: this.lastSnapshotAt, url: snap.url, node_count: snap.count, mode });
+
+    // M22 T5: Emit captcha_detected + error_appeared when a cognition bus is wired.
+    if (this._cognitionBus) {
+      emitCaptchaIfDetected(this._cognitionBus, this, snap, this._captchaDedup);
+      emitErrorIfPresent(this._cognitionBus, this, snap, this._errorDedup);
+    }
+
     return snap;
   }
 
@@ -1560,7 +1620,7 @@ export class Session {
 
     const storage = new CognitionStorage(this.siteGraph);
     const graph = storage.loadStateGraph(site);
-    const compiler = new IntentionCompiler({ graph, site });
+    const compiler = new IntentionCompiler({ graph, site, bus: this._cognitionBus ?? undefined });
 
     const adapter: SessionAdapter = {
       currentUrl: () => this.currentUrl,
@@ -1586,6 +1646,11 @@ export class Session {
   }
 
   async close(): Promise<void> {
+    // Cancel any pending network-idle timer and detach the response-complete listener.
+    if (this._networkIdleCleanup) {
+      this._networkIdleCleanup();
+      this._networkIdleCleanup = null;
+    }
     try { await this.captureToVault(); } catch { /* best-effort */ }
     await this.cdp.close().catch(() => {});
     if (this.routerHandle) {

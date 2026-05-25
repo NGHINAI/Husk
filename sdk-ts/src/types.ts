@@ -268,6 +268,34 @@ export interface HandoffSeamlessResult {
 
 export type HandoffResult = HandoffPasteResult | HandoffSeamlessResult;
 
+// ----- Cognition / Streaming types (M22 Phase E) -----
+
+export type EventType =
+  | "state_change"
+  | "network_idle"
+  | "error_appeared"
+  | "captcha_detected"
+  | "user_intervention_required";
+
+export interface EventFilter {
+  session_id?: string;
+  site?: string;
+  debounce_ms?: number;
+}
+
+export interface CognitionEvent {
+  id: string;
+  ts: number;
+  session_id: string;
+  site?: string;
+  type: EventType;
+  payload: Record<string, unknown>;
+}
+
+export interface SubscribeHandle {
+  unsubscribe(): Promise<void>;
+}
+
 // ----- Capability types (M21 Phase D) -----
 
 /**
