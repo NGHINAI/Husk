@@ -44,7 +44,13 @@ import { CognitionStorage } from "../cognition/storage.js";
 import { IntentionCompiler, type SessionAdapter } from "../cognition/intention-compiler.js";
 import type { Outcome } from "../cognition/intention-types.js";
 import type { CognitionBus } from "../cognition/cognition-bus.js";
-import { wireNetworkIdle } from "../cognition/event-emitters.js";
+import {
+  wireNetworkIdle,
+  emitCaptchaIfDetected,
+  emitErrorIfPresent,
+  type CaptchaDedupeState,
+  type ErrorDedupeState,
+} from "../cognition/event-emitters.js";
 
 export interface SessionOptions {
   /** Override binary path. Defaults to LIGHTPANDA_BIN env / PATH discovery. */
@@ -156,6 +162,12 @@ export class Session {
   private _sessionId: string = randomUUID();
   /** Cleanup function returned by wireNetworkIdle; called in close(). */
   private _networkIdleCleanup: (() => void) | null = null;
+  /** M22 T5: Optional cognition bus reference for captcha/error emitters. */
+  private _cognitionBus: CognitionBus | null = null;
+  /** M22 T5: Dedup state for captcha_detected emission (per session). */
+  private _captchaDedup: CaptchaDedupeState = { lastCaptchaKey: null };
+  /** M22 T5: Dedup state for error_appeared emission (per session). */
+  private _errorDedup: ErrorDedupeState = { lastErrorTexts: new Set() };
   /** Ring buffer of recent console messages (Runtime + Log CDP events). */
   private consoleBuffer = new ConsoleBuffer(50);
   /** Ring buffer of recent session actions (click, type, etc). */
@@ -393,6 +405,7 @@ export class Session {
     // M22 Phase E T4: Wire debounced network-idle detector when a cognition bus
     // is supplied. The cleanup function is stored and called in close().
     if (opts.cognitionBus) {
+      inst._cognitionBus = opts.cognitionBus;
       inst._networkIdleCleanup = wireNetworkIdle(opts.cognitionBus, inst);
     }
 
@@ -558,6 +571,13 @@ export class Session {
     this.siteGraph?.observe(snap);
     // Emit snapshot event on cache miss only (not on freshness-cache hits).
     this.emitWatch({ kind: "snapshot", ts: this.lastSnapshotAt, url: snap.url, node_count: snap.count, mode });
+
+    // M22 T5: Emit captcha_detected + error_appeared when a cognition bus is wired.
+    if (this._cognitionBus) {
+      emitCaptchaIfDetected(this._cognitionBus, this, snap, this._captchaDedup);
+      emitErrorIfPresent(this._cognitionBus, this, snap, this._errorDedup);
+    }
+
     return snap;
   }
 
