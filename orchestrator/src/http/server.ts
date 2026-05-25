@@ -11,8 +11,10 @@ import type { CredentialsStore } from "../credentials/store.js";
 import type { WatchBus } from "../watch/sse.js";
 import type { HumanIOBus } from "../hitl/bus.js";
 import type { ChromePool } from "../engine/chrome-pool.js";
+import type { CognitionBus } from "../cognition/cognition-bus.js";
 import { WATCH_HTML } from "../watch/index.html.js";
 import { registerHitlRoutes } from "./hitl-routes.js";
+import { handleCognitionSse } from "../stream/sse-cognition.js";
 
 export interface HuskServerOptions {
   port: number;
@@ -30,6 +32,8 @@ export interface HuskServerOptions {
   humanIO?: HumanIOBus;
   /** M17 T6: Chrome pool — passed to method context so goto can run page-health fallback. */
   chromePool?: ChromePool;
+  /** M22 T7: Cognition event bus — enables the /stream/cognition SSE endpoint. Only registered when host === "127.0.0.1". */
+  cognitionBus?: CognitionBus;
 }
 
 export interface HuskServer {
@@ -127,6 +131,12 @@ export async function createHuskServer(opts: HuskServerOptions): Promise<HuskSer
       portRef,
       seamlessTriggers,
     });
+  }
+
+  // M22 T7: /stream/cognition SSE endpoint — only registered when loopback + cognitionBus.
+  if (opts.host === "127.0.0.1" && opts.cognitionBus) {
+    const cognitionBus = opts.cognitionBus;
+    app.get("/stream/cognition", (c) => handleCognitionSse(cognitionBus, c));
   }
 
   const server = await new Promise<ServerType>((resolve) => {
