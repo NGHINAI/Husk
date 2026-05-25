@@ -1,10 +1,52 @@
 import type { Predicate, ActionStep, StateId } from "./types.js";
 
+/** Retry policy for a verify check. */
+export interface RetryOptions {
+  /** Total budget (default 5000). */
+  timeout_ms?: number;
+  /** Wait between attempts (default 250). */
+  interval_ms?: number;
+  /** Hard cap on attempts regardless of timeout (default 20). */
+  max_attempts?: number;
+}
+
 /** A verification check that runs after intention steps complete. */
 export type VerifyCheck =
-  | { type: "predicate"; predicate: Predicate; description: string }
-  | { type: "network"; method?: "GET" | "POST" | "PUT" | "DELETE"; url_pattern: string; status_min?: number; status_max?: number; description: string }
-  | { type: "url"; pattern: string; description: string };
+  | {
+      type: "predicate";
+      predicate: Predicate;
+      description: string;
+      retry?: RetryOptions;
+    }
+  | {
+      type: "network";
+      method?: "GET" | "POST" | "PUT" | "DELETE";
+      url_pattern: string;
+      status_min?: number;
+      status_max?: number;
+      description: string;
+      retry?: RetryOptions;
+    }
+  | {
+      type: "url";
+      pattern: string;
+      description: string;
+      retry?: RetryOptions;
+    }
+  | {
+      type: "text_present";
+      /** Regex (case-insensitive by default) to match against collapsed text content. */
+      pattern: string;
+      description: string;
+      retry?: RetryOptions;
+    }
+  | {
+      type: "text_absent";
+      /** Regex (case-insensitive by default). Passes when the pattern is NOT found. */
+      pattern: string;
+      description: string;
+      retry?: RetryOptions;
+    };
 
 /** A pattern matched against a runtime error to classify failure into a typed reason. */
 export interface FailureModePattern {
@@ -90,9 +132,17 @@ export type FailureReason =
 
 /** A single recorded verification check + result. */
 export interface Evidence {
-  predicate: string;          // human-readable description
+  predicate: string; // human-readable description
   passed: boolean;
   observed_value?: unknown;
+  /** Unix ms when this check ran (or the last attempt if polled). */
+  ts?: number;
+  /** Where the data came from: which subsystem produced it. */
+  source?: "url" | "network" | "ax" | "predicate" | "text";
+  /** Severity tag — defaults to "block" for hard verify; "warn" for softer signals. */
+  severity?: "info" | "warn" | "block";
+  /** When retrying, how many attempts were made. Absent for single-shot. */
+  attempts?: number;
 }
 
 /** Log entry for a single transition executed mid-intention. */
