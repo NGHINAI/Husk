@@ -87,7 +87,7 @@ function* walkTree(node: AxTreeNode): Generator<AxTreeNode> {
 }
 
 /** Collect all accessible names from every node in the tree. */
-function collectAllText(root: AxTreeNode): string {
+export function collectAllText(root: AxTreeNode): string {
   const parts: string[] = [];
   for (const node of walkTree(root)) {
     if (node.n) {
