@@ -37,6 +37,7 @@ ACTIONS:
 - "set_credentials" → store username/password/TOTP for a site (encrypted vault). Params: site, username, password, totp_secret?.
 - "list_profiles"   → list stored cookie-jar profile names.
 - "clear_vault"     → delete a stored profile. Param: profile_name.
+- "save_profile"    → explicitly save the current session's cookies to the vault. Param: session_id. Requires session to have a profile set.
 
 ENGINE SELECTION:
 - engine: "auto" (DEFAULT) — tries lightpanda first (~10ms, ~50MB), falls back to Chrome on rendering failure.
@@ -58,13 +59,13 @@ husk_session({action: "clear_vault", profile_name: "myprofile"})
       properties: {
         action: {
           type: "string",
-          enum: ["create", "close", "goto", "login", "set_credentials", "list_profiles", "clear_vault"],
+          enum: ["create", "close", "goto", "login", "set_credentials", "list_profiles", "clear_vault", "save_profile"],
           description: "The session operation to perform.",
         },
         session_id: { type: "string", description: "Required for: close, goto, login." },
         url: { type: "string", description: "For action=goto. Absolute URL." },
         profile_name: { type: "string", description: "For action=clear_vault. The profile to delete." },
-        profile: { type: "string", description: "For action=create (restore cookies) or action=login (mode B lookup)." },
+        profile: { type: "string", description: "Named vault profile. Set on create to restore cookies; required for save_profile." },
         parent_session_id: { type: "string", description: "For action=create. Open a sibling tab in an existing tab group." },
         capability: { type: "object", description: "For action=create. CapabilityRequirement for engine selection." },
         engine: {
@@ -424,6 +425,8 @@ export async function handleToolCall(
         return await client.call("vault_list_profiles", {});
       case "clear_vault":
         return await client.call("vault_clear", { profile: args.profile_name });
+      case "save_profile":
+        return await client.call("vault_save", { session_id: args.session_id });
       default:
         throw new Error(`husk_session: invalid action "${String(args.action)}"`);
     }
