@@ -288,6 +288,21 @@ export const METHODS = {
     return { ok: true };
   },
 
+  async vault_save(
+    params: { session_id: string },
+    ctx: MethodContext
+  ): Promise<{ saved: true; profile: string; cookie_count: number } | { saved: false; reason: string }> {
+    const session = ctx.sessions.get(params.session_id);
+    if (!session) throw new Error(`session not found: ${params.session_id}`);
+    const profile = session.getProfile();
+    if (!profile) {
+      return { saved: false, reason: "session has no profile attached" };
+    }
+    await session.captureToVault();
+    const cookies = ctx.vault.list(profile);
+    return { saved: true, profile, cookie_count: cookies.length };
+  },
+
   async credentials_set(
     params: { profile: string; key: string; username: string; password: string; totp_secret?: string },
     ctx: MethodContext
