@@ -4,7 +4,7 @@ import type { Database } from "better-sqlite3";
  * Current schema version. Bump and add a migration block to applySchema
  * whenever a column changes.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Apply the Husk site-graph SQLite schema to a database connection.
@@ -64,7 +64,65 @@ export function applySchema(db: Database): void {
     }
   }
 
-  // Record / verify schema version
+  // M18 / schema version 3: cognition tables for v0.1 state graphs.
+  // CREATE TABLE IF NOT EXISTS is idempotent — safe on existing DBs.
+  db.exec(`
+    -- Per-site states (the AX-fingerprint of a page)
+    CREATE TABLE IF NOT EXISTS cognition_states (
+      site          TEXT NOT NULL,
+      state_id      TEXT NOT NULL,
+      identify_by   TEXT NOT NULL,
+      affordances   TEXT NOT NULL,
+      observed_count INTEGER NOT NULL DEFAULT 0,
+      confidence    REAL NOT NULL DEFAULT 0.5,
+      last_seen_at  INTEGER NOT NULL,
+      PRIMARY KEY (site, state_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cognition_states_site
+      ON cognition_states(site);
+
+    -- Per-site transitions (state → action → state)
+    CREATE TABLE IF NOT EXISTS cognition_transitions (
+      site            TEXT NOT NULL,
+      from_state      TEXT NOT NULL,
+      to_state        TEXT NOT NULL,
+      action_sequence TEXT NOT NULL,
+      success_count   INTEGER NOT NULL DEFAULT 0,
+      failure_count   INTEGER NOT NULL DEFAULT 0,
+      avg_duration_ms REAL NOT NULL DEFAULT 0,
+      confidence      REAL NOT NULL DEFAULT 0.5,
+      last_used_at    INTEGER NOT NULL,
+      PRIMARY KEY (site, from_state, to_state)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cognition_transitions_site
+      ON cognition_transitions(site);
+    CREATE INDEX IF NOT EXISTS idx_cognition_transitions_from
+      ON cognition_transitions(site, from_state);
+
+    -- Observation log (chronological record of state changes)
+    CREATE TABLE IF NOT EXISTS cognition_observations (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      site             TEXT NOT NULL,
+      ts               INTEGER NOT NULL,
+      prev_state       TEXT,
+      current_state    TEXT NOT NULL,
+      url              TEXT NOT NULL,
+      snapshot_summary TEXT,
+      action_taken     TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cognition_observations_site_ts
+      ON cognition_observations(site, ts);
+
+    -- Per-site exploration lock (concurrent agent coordination)
+    CREATE TABLE IF NOT EXISTS cognition_exploration_locks (
+      site        TEXT PRIMARY KEY,
+      holder_id   TEXT NOT NULL,
+      acquired_at INTEGER NOT NULL,
+      expires_at  INTEGER NOT NULL
+    );
+  `);
+
+  // Record / verify schema version in schema_meta table
   const existing = db
     .prepare("SELECT value FROM schema_meta WHERE key = 'version'")
     .get() as { value: string } | undefined;
@@ -76,5 +134,12 @@ export function applySchema(db: Database): void {
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'version'").run(
       String(SCHEMA_VERSION)
     );
+  }
+
+  // Also keep PRAGMA user_version in sync — some tooling (and tests) read it directly.
+  const currentPragmaVersion = (db.pragma("user_version") as Array<{ user_version: number }>)[0]
+    ?.user_version ?? 0;
+  if (currentPragmaVersion < SCHEMA_VERSION) {
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }
 }
